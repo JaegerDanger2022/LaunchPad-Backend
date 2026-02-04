@@ -174,6 +174,10 @@ async def _generate(req: ConversationTurnRequest):
     }
 
     enriched_context: Optional[dict] = None
+    # Track which AI message IDs we've already forwarded.  LangGraph re-sends
+    # the full state on every node completion, so without this the greeting
+    # (and any earlier AI messages) would be forwarded again.
+    seen_ai_ids: set = set()
     run_started = False  # LangGraph sends a pre-run `values` snapshot; skip it
 
     try:
@@ -198,17 +202,18 @@ async def _generate(req: ConversationTurnRequest):
                     elif line == "":
                         # Blank line = end of one SSE event block
                         if current_event and current_data:
-                            # metadata fires once the run actually starts;
-                            # everything before it is the pre-existing state
                             if current_event == "metadata":
                                 run_started = True
-                            elif run_started:
-                                # Forward AI text to the frontend
-                                for frame in _forward_chunk(current_event, current_data):
-                                    yield frame
-
-                                # Track enriched_context for post-stream trigger
-                                if current_event == "values":
+                            elif current_event == "values":
+                                if not run_started:
+                                    # Pre-run snapshot: seed seen_ai_ids so we
+                                    # don't re-forward any messages that already
+                                    # exist on the thread.
+                                    _seed_seen_ids(current_data, seen_ai_ids)
+                                else:
+                                    # Forward only NEW AI messages
+                                    for frame in _forward_chunk(current_event, current_data, seen_ai_ids):
+                                        yield frame
                                     enriched_context = _maybe_extract_context(
                                         current_data, enriched_context
                                     )
@@ -243,13 +248,24 @@ async def _generate(req: ConversationTurnRequest):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _forward_chunk(event_name: str, data_str: str):
+def _seed_seen_ids(data_str: str, seen_ai_ids: set):
+    """Collect all existing AI message IDs from a values snapshot so we don't
+    re-forward them later."""
+    try:
+        state = json.loads(data_str)
+        for msg in state.get("messages", []):
+            if isinstance(msg, dict) and msg.get("type") == "ai" and msg.get("id"):
+                seen_ai_ids.add(msg["id"])
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+
+
+def _forward_chunk(event_name: str, data_str: str, seen_ai_ids: set):
     """
     LangGraph emits `event: values` with the full graph state each time a node
     completes.  The state is a flat dict:
         { "messages": [...], "enriched_context": ..., ... }
-    We find the last AI message and forward its content as a chunk.
-    Only called after the `metadata` event so the pre-run snapshot is skipped.
+    We find the last AI message and forward it only if its ID is new.
     """
     if event_name != "values":
         return
@@ -259,6 +275,11 @@ def _forward_chunk(event_name: str, data_str: str):
         msgs = state.get("messages", [])
         for msg in reversed(msgs):
             if isinstance(msg, dict) and msg.get("type") == "ai":
+                msg_id = msg.get("id", "")
+                if msg_id in seen_ai_ids:
+                    break  # already forwarded (or pre-existing)
+                if msg_id:
+                    seen_ai_ids.add(msg_id)
                 content = msg.get("content", "")
                 if content:
                     yield _sse("chunk", json.dumps({"text": content}))
