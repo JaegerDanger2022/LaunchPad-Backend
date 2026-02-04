@@ -123,7 +123,7 @@ async def create_dream(dream_data: CreateDreamRequest):
         headers = {"x-api-key": api_key}
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=300.0) as client:
                 # Step 1: Create a thread
                 create_thread_url = f"{langgraph_url}/threads"
                 logger.info(f"Creating thread at: {create_thread_url}")
@@ -166,7 +166,7 @@ async def create_dream(dream_data: CreateDreamRequest):
                     run_endpoint,
                     json=run_payload,
                     headers=headers,
-                    timeout=30.0
+                    timeout=300.0
                 )
                 logger.info(f"Run response status code: {run_response.status_code}")
                 run_response.raise_for_status()
