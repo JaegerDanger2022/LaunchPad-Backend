@@ -174,7 +174,7 @@ async def _generate(req: ConversationTurnRequest):
     }
 
     enriched_context: Optional[dict] = None
-    seen_ai_ids: set = set()  # dedupe: only forward each AI message once
+    run_started = False  # LangGraph sends a pre-run `values` snapshot; skip it
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -198,16 +198,20 @@ async def _generate(req: ConversationTurnRequest):
                     elif line == "":
                         # Blank line = end of one SSE event block
                         if current_event and current_data:
-                            # Forward chunk events to the frontend
-                            for frame in _forward_chunk(current_event, current_data, seen_ai_ids):
-                                yield frame
+                            # metadata fires once the run actually starts;
+                            # everything before it is the pre-existing state
+                            if current_event == "metadata":
+                                run_started = True
+                            elif run_started:
+                                # Forward AI text to the frontend
+                                for frame in _forward_chunk(current_event, current_data):
+                                    yield frame
 
-                            # Keep track of the latest state so we can
-                            # check enriched_context after the stream closes
-                            if current_event == "values":
-                                enriched_context = _maybe_extract_context(
-                                    current_data, enriched_context
-                                )
+                                # Track enriched_context for post-stream trigger
+                                if current_event == "values":
+                                    enriched_context = _maybe_extract_context(
+                                        current_data, enriched_context
+                                    )
 
                         current_event = None
                         current_data = None
@@ -239,13 +243,13 @@ async def _generate(req: ConversationTurnRequest):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _forward_chunk(event_name: str, data_str: str, seen_ai_ids: set):
+def _forward_chunk(event_name: str, data_str: str):
     """
     LangGraph emits `event: values` with the full graph state each time a node
     completes.  The state is a flat dict:
         { "messages": [...], "enriched_context": ..., ... }
-    We find the last AI message and forward it only if we haven't seen its id
-    before (the full state is re-sent on every node completion).
+    We find the last AI message and forward its content as a chunk.
+    Only called after the `metadata` event so the pre-run snapshot is skipped.
     """
     if event_name != "values":
         return
@@ -255,11 +259,6 @@ def _forward_chunk(event_name: str, data_str: str, seen_ai_ids: set):
         msgs = state.get("messages", [])
         for msg in reversed(msgs):
             if isinstance(msg, dict) and msg.get("type") == "ai":
-                msg_id = msg.get("id", "")
-                if msg_id and msg_id in seen_ai_ids:
-                    break  # already forwarded this one
-                if msg_id:
-                    seen_ai_ids.add(msg_id)
                 content = msg.get("content", "")
                 if content:
                     yield _sse("chunk", json.dumps({"text": content}))
