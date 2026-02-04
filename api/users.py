@@ -783,3 +783,34 @@ async def update_plan(user_id: str, update_data: UpdatePlanRequest):
         logger.error(f"Error updating plan for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error while updating plan")
 
+
+class UpdateActivityRequest(BaseModel):
+    last_activity: str
+
+
+@router.put("/{user_id}/activity", status_code=200, tags=["users"])
+async def update_activity(user_id: str, update_data: UpdateActivityRequest):
+    """Record the user's last activity timestamp."""
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        result = await db.users.find_one_and_update(
+            {"user_id": user_id},
+            {"$set": {"last_activity": update_data.last_activity}},
+            return_document=True
+        )
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        logger.info(f"Updated last_activity for user {user_id}")
+        return {"success": True, "last_activity": update_data.last_activity}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating activity for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
