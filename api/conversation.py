@@ -39,6 +39,7 @@ router = APIRouter()
 
 LANGGRAPH_AGENT_URL = os.getenv("LANGGRAPH_AGENT_URL")
 LANGGRAPH_API_KEY = os.getenv("LANGGRAPH_API_KEY")
+LANGGRAPH_CONVERSATION_ASSISTANT_ID = os.getenv("LANGGRAPH_CONVERSATION_ASSISTANT_ID")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
 
 
@@ -78,8 +79,8 @@ async def conversation_start(req: ConversationStartRequest):
     3. Invoke the "conversation" graph with user_message=None → greeting.
     4. Return session_id + greeting text.
     """
-    if not LANGGRAPH_AGENT_URL or not LANGGRAPH_API_KEY:
-        raise HTTPException(status_code=500, detail="LANGGRAPH_AGENT_URL or LANGGRAPH_API_KEY not configured")
+    if not LANGGRAPH_AGENT_URL or not LANGGRAPH_API_KEY or not LANGGRAPH_CONVERSATION_ASSISTANT_ID:
+        raise HTTPException(status_code=500, detail="LANGGRAPH_AGENT_URL, LANGGRAPH_API_KEY, or LANGGRAPH_CONVERSATION_ASSISTANT_ID not configured")
 
     # --- verify user ---
     db = get_db()
@@ -106,19 +107,19 @@ async def conversation_start(req: ConversationStartRequest):
 
     # --- invoke conversation graph (first turn → greeting) ---
     invoke_payload = {
+        "assistant_id": LANGGRAPH_CONVERSATION_ASSISTANT_ID,
         "input": {
             "user_id": req.user_id,
             "user_message": None,       # None triggers the greeting branch
             "messages": [],
             "enriched_context": None,
         },
-        "config": {"configurable": {"thread_id": thread_id}},
     }
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             invoke_resp = await client.post(
-                f"{LANGGRAPH_AGENT_URL}/conversation/invoke",
+                f"{LANGGRAPH_AGENT_URL}/threads/{thread_id}/runs/wait",
                 headers=_lg_headers(),
                 json=invoke_payload,
             )
@@ -163,13 +164,13 @@ async def _generate(req: ConversationTurnRequest):
     We forward AI text as "chunk" events and finish with a single "done" event.
     """
     stream_payload = {
+        "assistant_id": LANGGRAPH_CONVERSATION_ASSISTANT_ID,
         "input": {
             "user_id": req.user_id,
             "user_message": req.message,
             "messages": [],              # thread persistence fills this in
             "enriched_context": None,
         },
-        "config": {"configurable": {"thread_id": req.session_id}},
     }
 
     enriched_context: Optional[dict] = None
@@ -178,7 +179,7 @@ async def _generate(req: ConversationTurnRequest):
         async with httpx.AsyncClient(timeout=120.0) as client:
             async with client.stream(
                 "POST",
-                f"{LANGGRAPH_AGENT_URL}/conversation/stream",
+                f"{LANGGRAPH_AGENT_URL}/threads/{req.session_id}/runs/stream",
                 headers=_lg_headers(),
                 json=stream_payload,
             ) as resp:
