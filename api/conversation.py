@@ -15,13 +15,14 @@ SSE event format (POST /turn):
     data: {"session_id": "…", "conversation_complete": bool, "enriched_context": … | null}
 """
 
+import asyncio
 import json
 import logging
 import os
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -143,12 +144,11 @@ async def conversation_start(req: ConversationStartRequest):
 # ---------------------------------------------------------------------------
 
 @router.post("/turn")
-async def conversation_turn(req: ConversationTurnRequest, background_tasks: BackgroundTasks):
+async def conversation_turn(req: ConversationTurnRequest):
     """Stream the AI reply as SSE, then emit a done event."""
     return StreamingResponse(
-        _generate(req, background_tasks),
+        _generate(req),
         media_type="text/event-stream",
-        background=background_tasks,
     )
 
 
@@ -156,7 +156,7 @@ async def conversation_turn(req: ConversationTurnRequest, background_tasks: Back
 # SSE generator
 # ---------------------------------------------------------------------------
 
-async def _generate(req: ConversationTurnRequest, background_tasks: BackgroundTasks):
+async def _generate(req: ConversationTurnRequest):
     """
     Proxy the LangGraph /conversation/stream SSE back to the frontend.
 
@@ -166,8 +166,9 @@ async def _generate(req: ConversationTurnRequest, background_tasks: BackgroundTa
         event: end        – stream finished (not always present)
 
     We forward new AI text as "chunk" events and finish with a single "done" event.
-    When the conversation is complete, the roadmap workflow is scheduled as a
-    BackgroundTask so it runs after the response body is fully sent.
+    When the conversation is complete the roadmap workflow is fired via
+    asyncio.create_task so it runs on the event loop independently of the
+    response lifecycle.
     """
     stream_payload = {
         "assistant_id": LANGGRAPH_CONVERSATION_ASSISTANT_ID,
@@ -234,15 +235,13 @@ async def _generate(req: ConversationTurnRequest, background_tasks: BackgroundTa
         }))
         return
 
-    # --- schedule roadmap before the final yield, then emit done ---
-    # BackgroundTasks won't actually execute until after the response body is
-    # fully sent, so it's safe to add the task here even though done hasn't
-    # been yielded yet.  We MUST do it before the yield because any code after
-    # the last yield in a StreamingResponse generator is silently skipped once
-    # the client disconnects.
+    # --- fire roadmap before the final yield ---
+    # asyncio.create_task schedules the coroutine on the running event loop;
+    # it will execute regardless of when the client disconnects or the
+    # StreamingResponse generator is garbage-collected.
     conversation_complete = enriched_context is not None
     if conversation_complete:
-        background_tasks.add_task(_trigger_roadmap_workflow, req.user_id, enriched_context)
+        asyncio.create_task(_trigger_roadmap_workflow(req.user_id, enriched_context))
 
     yield _sse("done", json.dumps({
         "session_id": req.session_id,
