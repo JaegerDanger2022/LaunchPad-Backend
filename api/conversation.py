@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from core.database import get_db
+from api.dreams import create_dream, CreateDreamRequest
 
 load_dotenv()
 
@@ -40,7 +41,6 @@ router = APIRouter()
 LANGGRAPH_AGENT_URL = os.getenv("LANGGRAPH_AGENT_URL")
 LANGGRAPH_API_KEY = os.getenv("LANGGRAPH_API_KEY")
 LANGGRAPH_CONVERSATION_ASSISTANT_ID = os.getenv("LANGGRAPH_CONVERSATION_ASSISTANT_ID")
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
 
 
 def _lg_headers() -> dict:
@@ -327,37 +327,25 @@ def _extract_last_ai_text(output: dict) -> str:
 
 async def _trigger_roadmap_workflow(user_id: str, enriched_context: dict):
     """
-    Fire off the full roadmap pipeline via POST /api/dreams/create — the exact
-    same internal call the voice WebSocket endpoint makes (voice_v2.py:366).
+    Call create_dream directly (same process) to kick off the roadmap pipeline.
     """
-    # Pull real user profile so architect can personalise the roadmap
-    db = get_db()
-    user = await db.users.find_one({"user_id": user_id}) if db else None
-    user_profile = {
-        "traits": (user or {}).get("traits", {}),
-        "preferences": (user or {}).get("preferences", {}),
-    }
-
-    payload = {
-        "user_id": user_id,
-        "user_request": enriched_context.get("user_dream", ""),
-        "user_profile": user_profile,
-        "research_data": {},
-        "messages": [],
-        "roadmap": {},
-        "tracks": [],
-        "status": "planning",
-        "enriched_context": enriched_context,
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{BACKEND_URL}/api/dreams/create",
-                json=payload,
-            )
-            resp.raise_for_status()
-            logger.info("[CONVERSATION /turn] roadmap workflow triggered for user %s", user_id)
+        db = get_db()
+        user = await db.users.find_one({"user_id": user_id}) if db else None
+        user_profile = {
+            "traits": (user or {}).get("traits", {}),
+            "preferences": (user or {}).get("preferences", {}),
+        }
+
+        dream_data = CreateDreamRequest(
+            user_id=user_id,
+            user_request=enriched_context.get("user_dream", ""),
+            user_profile=user_profile,
+            enriched_context=enriched_context,
+        )
+
+        await create_dream(dream_data)
+        logger.info("[CONVERSATION /turn] roadmap workflow triggered for user %s", user_id)
     except Exception as exc:
         # Non-fatal — conversation already completed successfully for the user.
         logger.error("[CONVERSATION /turn] roadmap trigger failed: %s", exc, exc_info=True)
