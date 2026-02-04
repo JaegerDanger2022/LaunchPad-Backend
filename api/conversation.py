@@ -92,6 +92,23 @@ async def conversation_start(req: ConversationStartRequest):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # --- dream-limit gate (same rules as POST /dreams/create) ---
+    plan = user.get("plan", "free")
+    if plan == "free":
+        total_dreams = await db.dreams.count_documents({"user_id": req.user_id})
+        if total_dreams >= 2:
+            raise HTTPException(
+                status_code=403,
+                detail="Dream limit reached. Upgrade to Pro to create more dreams."
+            )
+    else:
+        active_dreams = await db.dreams.count_documents({"user_id": req.user_id, "status": "active"})
+        if active_dreams >= 3:
+            raise HTTPException(
+                status_code=403,
+                detail="Active dream limit reached. Complete or delete a dream to create a new one."
+            )
+
     # --- create thread ---
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
