@@ -239,8 +239,8 @@ async def create_victory(victory_data: CreateVictoryRequest):
         if milestone.get("status") != "completed":
             raise HTTPException(status_code=400, detail="Milestone must be completed to create a victory")
 
-        # 4. Check if victory already exists for this milestone
-        existing_victory = await db.victory_cards.find_one({"milestoneId": victory_data.milestoneId})
+        # 4. Check if victory already exists for this milestone within this dream
+        existing_victory = await db.victory_cards.find_one({"milestoneId": victory_data.milestoneId, "dreamId": dream["thread_id"]})
         if existing_victory:
             raise HTTPException(status_code=409, detail="Victory already exists for this milestone")
 

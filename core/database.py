@@ -109,9 +109,16 @@ async def create_indexes():
         await db.victory_cards.create_index("id", unique=True)
         logger.info("[DB] Index created: victory_cards.id")
 
-        logger.info("[DB] Creating index: victory_cards.milestoneId (unique)")
-        await db.victory_cards.create_index("milestoneId", unique=True)
-        logger.info("[DB] Index created: victory_cards.milestoneId")
+        # Drop old single-field milestoneId unique index if it exists
+        try:
+            await db.victory_cards.drop_index("milestoneId_1")
+            logger.info("[DB] Dropped legacy index: victory_cards.milestoneId_1")
+        except Exception:
+            pass  # Index didn't exist, nothing to drop
+
+        logger.info("[DB] Creating index: victory_cards.(milestoneId, dreamId) (unique)")
+        await db.victory_cards.create_index([("milestoneId", 1), ("dreamId", 1)], unique=True)
+        logger.info("[DB] Index created: victory_cards.(milestoneId, dreamId)")
 
         # Courage Boosts collection (Community Features)
         logger.info("[DB] Creating index: courage_boosts.victoryCardId")
