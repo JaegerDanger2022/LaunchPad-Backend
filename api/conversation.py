@@ -174,11 +174,12 @@ async def _generate(req: ConversationTurnRequest):
     }
 
     enriched_context: Optional[dict] = None
-    # Track which AI message IDs we've already forwarded.  LangGraph re-sends
-    # the full state on every node completion, so without this the greeting
-    # (and any earlier AI messages) would be forwarded again.
+    # LangGraph stream order is always: metadata → values (existing state) →
+    # values (new AI message appended).  The first values after metadata is
+    # the thread state *before* this run's AI node fires — seed seen_ai_ids
+    # from it so we never re-forward old messages.
     seen_ai_ids: set = set()
-    run_started = False  # LangGraph sends a pre-run `values` snapshot; skip it
+    first_values_seen = False
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -190,7 +191,6 @@ async def _generate(req: ConversationTurnRequest):
             ) as resp:
                 resp.raise_for_status()
 
-                # Parse the upstream SSE line-by-line
                 current_event: Optional[str] = None
                 current_data: Optional[str] = None
 
@@ -200,37 +200,15 @@ async def _generate(req: ConversationTurnRequest):
                     elif line.startswith("data:"):
                         current_data = line[len("data:"):].strip()
                     elif line == "":
-                        # Blank line = end of one SSE event block
                         if current_event and current_data:
-                            # --- DEBUG: log event sequence with AI msg IDs ---
                             if current_event == "values":
-                                try:
-                                    _dbg_state = json.loads(current_data)
-                                    _dbg_ai_ids = [
-                                        m.get("id", "NO-ID")
-                                        for m in _dbg_state.get("messages", [])
-                                        if isinstance(m, dict) and m.get("type") == "ai"
-                                    ]
-                                except Exception:
-                                    _dbg_ai_ids = ["PARSE-ERR"]
-                                logger.warning(
-                                    "[CONV DBG] event=%s run_started=%s seen=%s ai_ids_in_payload=%s",
-                                    current_event, run_started, seen_ai_ids, _dbg_ai_ids,
-                                )
-                            else:
-                                logger.warning("[CONV DBG] event=%s run_started=%s", current_event, run_started)
-                            # --- end debug ---
-
-                            if current_event == "metadata":
-                                run_started = True
-                            elif current_event == "values":
-                                if not run_started:
-                                    # Pre-run snapshot: seed seen_ai_ids so we
-                                    # don't re-forward any messages that already
-                                    # exist on the thread.
+                                if not first_values_seen:
+                                    # First values = state before AI responds.
+                                    # Record every AI id so we skip them later.
                                     _seed_seen_ids(current_data, seen_ai_ids)
+                                    first_values_seen = True
                                 else:
-                                    # Forward only NEW AI messages
+                                    # Subsequent values: forward only new AI msgs
                                     for frame in _forward_chunk(current_event, current_data, seen_ai_ids):
                                         yield frame
                                     enriched_context = _maybe_extract_context(
