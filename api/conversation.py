@@ -158,10 +158,10 @@ async def _generate(req: ConversationTurnRequest):
 
     LangGraph emits events like:
         event: metadata   – bookkeeping, ignored
-        event: updates    – node output; contains the new AI message
-        event: end        – stream finished
+        event: values     – full graph state snapshot; contains messages array
+        event: end        – stream finished (not always present)
 
-    We forward AI text as "chunk" events and finish with a single "done" event.
+    We forward new AI text as "chunk" events and finish with a single "done" event.
     """
     stream_payload = {
         "assistant_id": LANGGRAPH_CONVERSATION_ASSISTANT_ID,
@@ -174,6 +174,7 @@ async def _generate(req: ConversationTurnRequest):
     }
 
     enriched_context: Optional[dict] = None
+    seen_ai_ids: set = set()  # dedupe: only forward each AI message once
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -197,15 +198,13 @@ async def _generate(req: ConversationTurnRequest):
                     elif line == "":
                         # Blank line = end of one SSE event block
                         if current_event and current_data:
-                            logger.warning("[CONVERSATION /turn] RAW EVENT event=%s data=%s", current_event, current_data)
-
                             # Forward chunk events to the frontend
-                            for frame in _forward_chunk(current_event, current_data):
+                            for frame in _forward_chunk(current_event, current_data, seen_ai_ids):
                                 yield frame
 
-                            # Keep track of the latest updates so we can
+                            # Keep track of the latest state so we can
                             # check enriched_context after the stream closes
-                            if current_event == "updates":
+                            if current_event == "values":
                                 enriched_context = _maybe_extract_context(
                                     current_data, enriched_context
                                 )
@@ -240,39 +239,41 @@ async def _generate(req: ConversationTurnRequest):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _forward_chunk(event_name: str, data_str: str):
+def _forward_chunk(event_name: str, data_str: str, seen_ai_ids: set):
     """
-    If this is an 'updates' event containing an AI message, yield a chunk frame.
+    LangGraph emits `event: values` with the full graph state each time a node
+    completes.  The state is a flat dict:
+        { "messages": [...], "enriched_context": ..., ... }
+    We find the last AI message and forward it only if we haven't seen its id
+    before (the full state is re-sent on every node completion).
     """
-    if event_name != "updates":
+    if event_name != "values":
         return
 
     try:
-        parsed = json.loads(data_str)
-        node_output = parsed[-1] if isinstance(parsed, list) else parsed
-        conv_out = node_output.get("conversation", node_output)
-        msgs = conv_out.get("messages", [])
-        if msgs:
-            last = msgs[-1]
-            content = (
-                last.get("content", "")
-                if isinstance(last, dict)
-                else getattr(last, "content", "")
-            )
-            if content:
-                yield _sse("chunk", json.dumps({"text": content}))
+        state = json.loads(data_str)
+        msgs = state.get("messages", [])
+        for msg in reversed(msgs):
+            if isinstance(msg, dict) and msg.get("type") == "ai":
+                msg_id = msg.get("id", "")
+                if msg_id and msg_id in seen_ai_ids:
+                    break  # already forwarded this one
+                if msg_id:
+                    seen_ai_ids.add(msg_id)
+                content = msg.get("content", "")
+                if content:
+                    yield _sse("chunk", json.dumps({"text": content}))
+                break
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         logger.warning("[CONVERSATION _forward_chunk] parse error: %s | raw: %s", exc, data_str)
 
 
 def _maybe_extract_context(data_str: str, current: Optional[dict]) -> Optional[dict]:
-    """Pull enriched_context out of an updates payload if present."""
+    """Pull enriched_context out of a values payload if present."""
     try:
-        parsed = json.loads(data_str)
-        node_output = parsed[-1] if isinstance(parsed, list) else parsed
-        conv_out = node_output.get("conversation", node_output)
-        if conv_out.get("enriched_context"):
-            return conv_out["enriched_context"]
+        state = json.loads(data_str)
+        if state.get("enriched_context"):
+            return state["enriched_context"]
     except (json.JSONDecodeError, KeyError, TypeError):
         pass
     return current
