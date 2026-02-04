@@ -80,6 +80,7 @@ async def get_user_dreams(
                 "category": 1,
                 "isComplete": 1,
                 "dream_image_bytes": 1,
+                "dream_card_bg": 1,
             }
 
         # Fetch dreams
