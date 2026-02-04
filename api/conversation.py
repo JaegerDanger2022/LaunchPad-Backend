@@ -228,17 +228,21 @@ async def _generate(req: ConversationTurnRequest):
         }))
         return
 
-    # --- post-stream: if extraction fired, kick off the full roadmap workflow ---
+    # --- emit done before any post-stream work so the client always gets it ---
     conversation_complete = enriched_context is not None
-
-    if conversation_complete:
-        await _trigger_roadmap_workflow(req.user_id, enriched_context)
 
     yield _sse("done", json.dumps({
         "session_id": req.session_id,
         "conversation_complete": conversation_complete,
         "enriched_context": enriched_context,
     }))
+
+    # --- kick off the roadmap pipeline after done is sent ---
+    if conversation_complete:
+        try:
+            await _trigger_roadmap_workflow(req.user_id, enriched_context)
+        except Exception as exc:
+            logger.error("[CONVERSATION /turn] roadmap trigger failed: %s", exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
