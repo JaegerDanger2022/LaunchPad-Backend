@@ -80,8 +80,6 @@ async def get_user_dreams(
                 "category": 1,
                 "isComplete": 1,
                 "dream_image_bytes": 1,
-                # Exclude roadmap
-                "roadmap": 0
             }
 
         # Fetch dreams
