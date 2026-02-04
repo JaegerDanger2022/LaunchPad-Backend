@@ -1,0 +1,270 @@
+"""
+Milestone API endpoints - Update and manage milestones in roadmaps
+"""
+
+import logging
+from datetime import datetime, timezone
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+from core.database import get_db
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+class UpdateMilestoneRequest(BaseModel):
+    """Request schema for updating a milestone"""
+    status: str = Field(..., description="New status for the milestone (e.g., 'completed', 'pending', 'in_progress')")
+    evidence: str | None = Field(None, max_length=200, description="Evidence/proof text, max 200 characters")
+    impact: str | None = Field(None, description="Impact level - 'critical', 'high', 'medium', or 'low'")
+
+
+@router.put("/update-status/{user_id}/{thread_id}/{milestone_id}", status_code=200, tags=["milestone"])
+async def update_milestone_status(
+    user_id: str,
+    thread_id: str,
+    milestone_id: str,
+    update_data: UpdateMilestoneRequest
+):
+    """
+    Update a milestone's status in a dream.
+
+    Args:
+        user_id: The user ID who owns the dream
+        thread_id: The thread ID of the dream containing the milestone
+        milestone_id: The ID of the milestone to update
+        update_data: Request body containing the new status
+
+    Returns:
+        dict: Updated milestone data with the new status
+
+    Raises:
+        404: User, dream, or milestone not found
+        500: Database error
+    """
+    try:
+        db = get_db()
+        if db is None:
+            logger.error("Database connection not available")
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not available"
+            )
+
+        logger.info(f"Updating milestone {milestone_id} in dream {thread_id} for user {user_id} to status: {update_data.status}")
+
+        # Verify dream exists in the dreams collection
+        dream_doc = await db.dreams.find_one(
+            {"thread_id": thread_id, "user_id": user_id}
+        )
+
+        if not dream_doc:
+            logger.warning(f"Dream {thread_id} not found for user {user_id}")
+            raise HTTPException(
+                status_code=404,
+                detail="User or dream not found"
+            )
+
+        # Verify milestone exists in the dream
+        milestone_found = any(
+            m.get("id") == milestone_id
+            for m in dream_doc.get("roadmap", {}).get("milestones", [])
+        )
+
+        if not milestone_found:
+            logger.warning(f"Milestone {milestone_id} not found in dream {thread_id}")
+            raise HTTPException(
+                status_code=404,
+                detail="Milestone not found"
+            )
+
+        logger.info(f"Found dream and milestone. Proceeding with update.")
+
+        # Check if roadmap status is "started", if not set it
+        roadmap_status = dream_doc.get("roadmap", {}).get("status")
+        if roadmap_status != "started":
+            logger.info(f"Roadmap status is '{roadmap_status}', setting to 'started'")
+            await db.dreams.update_one(
+                {"thread_id": thread_id},
+                {"$set": {"roadmap.status": "started"}}
+            )
+
+        # Prepare milestone update fields
+        update_fields = {
+            "roadmap.milestones.$[m].status": update_data.status
+        }
+
+        if update_data.status == "completed":
+            update_fields["roadmap.milestones.$[m].completedDate"] = datetime.now(timezone.utc).isoformat()
+
+        if update_data.evidence is not None:
+            update_fields["roadmap.milestones.$[m].evidence"] = update_data.evidence
+
+        if update_data.impact is not None:
+            valid_impacts = ["critical", "high", "medium", "low"]
+            if update_data.impact in valid_impacts:
+                update_fields["roadmap.milestones.$[m].impact"] = update_data.impact
+            else:
+                logger.warning(f"Invalid impact level: {update_data.impact}. Using default.")
+
+        # Update the milestone in the dreams collection
+        updated_dream = await db.dreams.find_one_and_update(
+            {"thread_id": thread_id},
+            {"$set": update_fields},
+            array_filters=[{"m.id": milestone_id}],
+            return_document=True
+        )
+
+        if not updated_dream:
+            logger.error(f"Failed to update milestone despite verification passing")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to update milestone"
+            )
+
+        # Find the updated milestone from the returned dream doc
+        updated_milestone = next(
+            (m for m in updated_dream.get("roadmap", {}).get("milestones", [])
+             if m.get("id") == milestone_id),
+            None
+        )
+
+        # Update dream's metadata.score with milestone xp_points
+        xp_points = updated_milestone.get("xp_points", 0)
+
+        if xp_points > 0:
+            dream_metadata = updated_dream.get("metadata", {})
+            current_score = dream_metadata.get("score", None)
+
+            if current_score is None:
+                new_score = xp_points
+                logger.info(f"Creating dream metadata.score with value {xp_points}")
+            else:
+                new_score = current_score + xp_points
+                logger.info(f"Incrementing dream metadata.score from {current_score} to {new_score}")
+
+            total_xp = sum(
+                m.get("xp_points", 0) for m in updated_dream.get("roadmap", {}).get("milestones", [])
+            )
+
+            is_complete = new_score == total_xp
+            logger.info(f"Dream completion check: score={new_score}, total_xp={total_xp}, isComplete={is_complete}")
+
+            dream_update_fields = {
+                "metadata.score": new_score,
+                "metadata.total_xp": total_xp,
+            }
+            if is_complete:
+                dream_update_fields["isComplete"] = True
+                dream_update_fields["completed_at"] = datetime.now(timezone.utc).isoformat()
+                dream_update_fields["status"] = "completed"
+                logger.info(f"Dream {thread_id} is now complete! Setting status to completed.")
+
+            await db.dreams.update_one(
+                {"thread_id": thread_id},
+                {"$set": dream_update_fields}
+            )
+            logger.info(f"Updated dream metadata: score={new_score}, total_xp={total_xp}, isComplete={is_complete}")
+
+            # Sync completion to dreams_metadata on the user doc
+            if is_complete:
+                await db.users.update_one(
+                    {"user_id": user_id, "dreams_metadata.thread_id": thread_id},
+                    {"$set": {
+                        "dreams_metadata.$.status": "completed",
+                        "dreams_metadata.$.completed_at": dream_update_fields["completed_at"],
+                    }}
+                )
+
+        logger.info(f"Successfully updated milestone {milestone_id} to status: {update_data.status}")
+
+        # Build milestone response data
+        milestone_response = None
+        if updated_milestone:
+            milestone_response = {
+                "id": updated_milestone.get("id"),
+                "title": updated_milestone.get("title"),
+                "status": updated_milestone.get("status"),
+                "evidence": updated_milestone.get("evidence"),
+                "impact": updated_milestone.get("impact"),
+                "completedDate": updated_milestone.get("completedDate"),
+                "xp_points": updated_milestone.get("xp_points"),
+                "challenge_type": updated_milestone.get("challenge_type"),
+                "streak_eligible": updated_milestone.get("streak_eligible")
+            }
+
+        response = {
+            "success": True,
+            "message": f"Milestone updated",
+            "milestone": milestone_response
+        }
+
+        # Add isComplete to response if dream is complete
+        if xp_points > 0 and updated_dream:
+            # Recalculate is_complete for response
+            total_xp = sum(
+                m.get("xp_points", 0) for m in updated_dream.get("roadmap", {}).get("milestones", [])
+            )
+            dream_metadata = updated_dream.get("metadata", {})
+            current_score = dream_metadata.get("score", 0)
+            new_score = current_score + xp_points
+            is_complete_response = new_score == total_xp
+            response["isComplete"] = is_complete_response
+            response["dreamCompleted"] = is_complete_response  # NEW: explicit flag for journey recap
+
+            # Add dream stats for Journey Recap if dream is complete
+            if is_complete_response:
+                all_milestones = updated_dream.get("roadmap", {}).get("milestones", [])
+                total_milestone_count = len(all_milestones)
+
+                # Count completed milestones
+                completed_milestones = [
+                    m for m in all_milestones
+                    if m.get("status") == "completed"
+                ]
+                completed_milestone_count = len(completed_milestones)
+
+                # Find earliest completedDate (dream start date)
+                completed_dates = [
+                    m.get("completedDate")
+                    for m in all_milestones
+                    if m.get("completedDate") is not None
+                ]
+                dream_start_date = min(completed_dates) if completed_dates else None
+
+                # Get dream completion date
+                dream_completed_date = updated_dream.get("completed_at")
+
+                # Calculate duration in days
+                duration_days = 0
+                if dream_start_date and dream_completed_date:
+                    try:
+                        start = datetime.fromisoformat(dream_start_date.replace('Z', '+00:00'))
+                        end = datetime.fromisoformat(dream_completed_date.replace('Z', '+00:00'))
+                        duration_days = max(0, (end - start).days)
+                    except Exception as e:
+                        logger.warning(f"Failed to calculate duration: {e}")
+                        duration_days = 0
+
+                response["dreamStats"] = {
+                    "totalMilestones": total_milestone_count,
+                    "completedMilestones": completed_milestone_count,
+                    "completionPercentage": 100,
+                    "dreamStartDate": dream_start_date,
+                    "dreamCompletedDate": dream_completed_date,
+                    "durationDays": duration_days
+                }
+
+                logger.info(f"Dream complete! Stats: {response['dreamStats']}")
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating milestone {milestone_id}: {type(e).__name__}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update milestone: {str(e)}"
+        )
