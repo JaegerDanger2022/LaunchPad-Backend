@@ -41,7 +41,6 @@ class VictoryCardResponse(BaseModel):
     milestoneId: str
     milestoneTitle: str
     dreamId: str
-    dreamTitle: str
     dreamCategory: str
 
     evidenceSnippet: str
@@ -126,7 +125,6 @@ class VictoryCardDB(BaseModel):
     milestoneId: str
     milestoneTitle: str
     dreamId: str
-    dreamTitle: str
     dreamCategory: str
 
     evidenceSnippet: str
@@ -243,7 +241,6 @@ class InspirationItem(BaseModel):
     """Single inspiration item in user's list"""
     id: str  # Victory card ID
     milestoneTitle: str
-    dreamTitle: str
     dreamCategory: str
     userDisplayName: str
     createdAt: str  # Victory creation date

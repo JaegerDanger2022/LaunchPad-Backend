@@ -206,7 +206,6 @@ async def get_user_inspirations(
                 inspiration = InspirationItem(
                     id=victory["id"],
                     milestoneTitle=victory.get("milestoneTitle", "Untitled"),
-                    dreamTitle=victory.get("dreamTitle", "Untitled Dream"),
                     dreamCategory=victory.get("dreamCategory", "achievement_goals"),
                     userDisplayName=victory.get("userDisplayName", "Anonymous"),
                     createdAt=victory.get("createdAt", ""),
@@ -299,7 +298,6 @@ async def get_user_inspiration(
                 milestoneId=victory_doc["milestoneId"],
                 milestoneTitle=victory_doc.get("milestoneTitle", "Untitled"),
                 dreamId=victory_doc["dreamId"],
-                dreamTitle=victory_doc.get("dreamTitle", "Untitled Dream"),
                 dreamCategory=victory_doc.get("dreamCategory", "achievement_goals"),
                 evidenceSnippet=victory_doc.get("evidenceSnippet", ""),
                 confidenceBoost=victory_doc.get("confidenceBoost", 0),
