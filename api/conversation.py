@@ -5,7 +5,7 @@ POST /start   – create a LangGraph thread, invoke the conversation graph for
                 the greeting, and return session_id + ai_message.
 POST /turn    – send one user message; streams the AI reply back as SSE.
                 When extraction fires, kicks off the full roadmap workflow via
-                POST /api/dreams/create (same call the voice endpoint uses).
+                POST /api/dreams/create.
 
 SSE event format (POST /turn):
     event: chunk
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Environment – same vars voice_v2.py already uses
+# Environment
 # ---------------------------------------------------------------------------
 
 LANGGRAPH_AGENT_URL = os.getenv("LANGGRAPH_AGENT_URL")
@@ -197,6 +197,8 @@ async def _generate(req: ConversationTurnRequest):
                     elif line == "":
                         # Blank line = end of one SSE event block
                         if current_event and current_data:
+                            logger.warning("[CONVERSATION /turn] RAW EVENT event=%s data=%s", current_event, current_data)
+
                             # Forward chunk events to the frontend
                             for frame in _forward_chunk(current_event, current_data):
                                 yield frame
@@ -259,8 +261,8 @@ def _forward_chunk(event_name: str, data_str: str):
             )
             if content:
                 yield _sse("chunk", json.dumps({"text": content}))
-    except (json.JSONDecodeError, KeyError, TypeError):
-        pass
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        logger.warning("[CONVERSATION _forward_chunk] parse error: %s | raw: %s", exc, data_str)
 
 
 def _maybe_extract_context(data_str: str, current: Optional[dict]) -> Optional[dict]:
