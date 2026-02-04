@@ -330,7 +330,7 @@ async def _trigger_roadmap_workflow(user_id: str, enriched_context: dict):
     """
     try:
         db = get_db()
-        user = await db.users.find_one({"user_id": user_id}) if db else None
+        user = await db.users.find_one({"user_id": user_id}) if db is not None else None
         user_profile = {
             "traits": (user or {}).get("traits", {}),
             "preferences": (user or {}).get("preferences", {}),
