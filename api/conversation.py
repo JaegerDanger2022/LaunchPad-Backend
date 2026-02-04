@@ -21,7 +21,7 @@ import os
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -143,16 +143,20 @@ async def conversation_start(req: ConversationStartRequest):
 # ---------------------------------------------------------------------------
 
 @router.post("/turn")
-async def conversation_turn(req: ConversationTurnRequest):
+async def conversation_turn(req: ConversationTurnRequest, background_tasks: BackgroundTasks):
     """Stream the AI reply as SSE, then emit a done event."""
-    return StreamingResponse(_generate(req), media_type="text/event-stream")
+    return StreamingResponse(
+        _generate(req, background_tasks),
+        media_type="text/event-stream",
+        background=background_tasks,
+    )
 
 
 # ---------------------------------------------------------------------------
 # SSE generator
 # ---------------------------------------------------------------------------
 
-async def _generate(req: ConversationTurnRequest):
+async def _generate(req: ConversationTurnRequest, background_tasks: BackgroundTasks):
     """
     Proxy the LangGraph /conversation/stream SSE back to the frontend.
 
@@ -162,6 +166,8 @@ async def _generate(req: ConversationTurnRequest):
         event: end        – stream finished (not always present)
 
     We forward new AI text as "chunk" events and finish with a single "done" event.
+    When the conversation is complete, the roadmap workflow is scheduled as a
+    BackgroundTask so it runs after the response body is fully sent.
     """
     stream_payload = {
         "assistant_id": LANGGRAPH_CONVERSATION_ASSISTANT_ID,
@@ -228,21 +234,21 @@ async def _generate(req: ConversationTurnRequest):
         }))
         return
 
-    # --- emit done before any post-stream work so the client always gets it ---
+    # --- schedule roadmap before the final yield, then emit done ---
+    # BackgroundTasks won't actually execute until after the response body is
+    # fully sent, so it's safe to add the task here even though done hasn't
+    # been yielded yet.  We MUST do it before the yield because any code after
+    # the last yield in a StreamingResponse generator is silently skipped once
+    # the client disconnects.
     conversation_complete = enriched_context is not None
+    if conversation_complete:
+        background_tasks.add_task(_trigger_roadmap_workflow, req.user_id, enriched_context)
 
     yield _sse("done", json.dumps({
         "session_id": req.session_id,
         "conversation_complete": conversation_complete,
         "enriched_context": enriched_context,
     }))
-
-    # --- kick off the roadmap pipeline after done is sent ---
-    if conversation_complete:
-        try:
-            await _trigger_roadmap_workflow(req.user_id, enriched_context)
-        except Exception as exc:
-            logger.error("[CONVERSATION /turn] roadmap trigger failed: %s", exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
