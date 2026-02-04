@@ -202,6 +202,25 @@ async def _generate(req: ConversationTurnRequest):
                     elif line == "":
                         # Blank line = end of one SSE event block
                         if current_event and current_data:
+                            # --- DEBUG: log event sequence with AI msg IDs ---
+                            if current_event == "values":
+                                try:
+                                    _dbg_state = json.loads(current_data)
+                                    _dbg_ai_ids = [
+                                        m.get("id", "NO-ID")
+                                        for m in _dbg_state.get("messages", [])
+                                        if isinstance(m, dict) and m.get("type") == "ai"
+                                    ]
+                                except Exception:
+                                    _dbg_ai_ids = ["PARSE-ERR"]
+                                logger.warning(
+                                    "[CONV DBG] event=%s run_started=%s seen=%s ai_ids_in_payload=%s",
+                                    current_event, run_started, seen_ai_ids, _dbg_ai_ids,
+                                )
+                            else:
+                                logger.warning("[CONV DBG] event=%s run_started=%s", current_event, run_started)
+                            # --- end debug ---
+
                             if current_event == "metadata":
                                 run_started = True
                             elif current_event == "values":
