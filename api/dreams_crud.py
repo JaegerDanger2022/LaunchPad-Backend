@@ -5,8 +5,9 @@ Handles fetching, updating, and deleting dreams from the dedicated dreams collec
 
 import logging
 import base64
+import uuid
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timezone
 from core.database import get_db
@@ -21,6 +22,12 @@ class UpdateDreamRequest(BaseModel):
     status: Optional[str] = None
     isComplete: Optional[bool] = None
     roadmap: Optional[dict] = None
+
+
+class AddCustomMilestoneRequest(BaseModel):
+    """Request schema for adding a user-created milestone"""
+    title: str = Field(..., min_length=1, max_length=60)
+    challenge_type: str = Field(...)
 
 
 @router.get("", tags=["dreams-crud"])
@@ -402,4 +409,101 @@ async def get_dream_milestones(thread_id: str):
         raise
     except Exception as e:
         logger.error(f"Error fetching milestones for dream {thread_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/{thread_id}/milestones", status_code=201, tags=["dreams-crud"])
+async def add_custom_milestone(thread_id: str, data: AddCustomMilestoneRequest):
+    """
+    Add a user-created milestone to a dream.
+
+    The milestone is stored in the top-level ``customMilestones`` array on the
+    dream document (separate from the AI-generated ``roadmap.milestones``).
+    Its ID is also appended to the ``dependencies`` list on the **last**
+    milestone in ``roadmap.milestones`` (typically the celebration_moment gate),
+    so the dream cannot be marked complete until every custom milestone is also
+    done.  ``metadata.total_xp`` is bumped by the new milestone's xp_points so
+    that the score == total_xp completion check stays accurate.
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        dream = await db.dreams.find_one({"thread_id": thread_id})
+        if dream is None:
+            raise HTTPException(status_code=404, detail="Dream not found")
+
+        if dream.get("status") == "completed":
+            raise HTTPException(status_code=409, detail="Cannot add milestones to a completed dream")
+
+        # Build the new milestone document
+        milestone_id = f"custom_{uuid.uuid4().hex[:12]}"
+        xp_points = 10  # default for user-created milestones
+        new_milestone = {
+            "id": milestone_id,
+            "title": data.title,
+            "challenge_type": data.challenge_type,
+            "status": "not_started",
+            "xp_points": xp_points,
+            "time_estimate": "30 mins",
+            "description": "Custom milestone",
+            "motivation_hook": "",
+            "streak_eligible": False,
+            "is_custom": True,
+        }
+
+        # 1. Push into customMilestones array
+        await db.dreams.update_one(
+            {"thread_id": thread_id},
+            {"$push": {"customMilestones": new_milestone}}
+        )
+
+        # 2. Add this milestone's ID to the dependencies of the last roadmap milestone
+        roadmap_milestones = dream.get("roadmap", {}).get("milestones", [])
+        if roadmap_milestones:
+            last_index = len(roadmap_milestones) - 1
+            # Use positional-free dot notation with the concrete index
+            dep_path = f"roadmap.milestones.{last_index}.dependencies"
+            await db.dreams.update_one(
+                {"thread_id": thread_id},
+                {"$push": {dep_path: milestone_id}}
+            )
+            logger.info(f"Added dependency {milestone_id} to roadmap milestone index {last_index}")
+
+        # 3. Bump metadata.total_xp so score == total_xp check stays correct
+        current_total_xp = dream.get("metadata", {}).get("total_xp", 0)
+        # If total_xp was never set, compute it from all existing roadmap milestones first
+        if current_total_xp == 0:
+            current_total_xp = sum(
+                m.get("xp_points", 0) for m in roadmap_milestones
+            )
+            # Also add any previously existing custom milestones
+            current_total_xp += sum(
+                m.get("xp_points", 0) for m in dream.get("customMilestones", [])
+            )
+        new_total_xp = current_total_xp + xp_points
+        await db.dreams.update_one(
+            {"thread_id": thread_id},
+            {"$set": {"metadata.total_xp": new_total_xp, "updated_at": datetime.now(timezone.utc)}}
+        )
+
+        logger.info(f"Added custom milestone {milestone_id} to dream {thread_id}. total_xp now {new_total_xp}")
+
+        # Return the full updated customMilestones list
+        updated_dream = await db.dreams.find_one(
+            {"thread_id": thread_id},
+            {"customMilestones": 1}
+        )
+
+        return {
+            "success": True,
+            "milestone": new_milestone,
+            "milestones": updated_dream.get("customMilestones", [])
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding custom milestone to dream {thread_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
