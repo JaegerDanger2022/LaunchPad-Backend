@@ -27,7 +27,7 @@ class CreateUserRequest(BaseModel):
     user_id: str = Field(..., description="Unique user identifier")
     email: str = Field(..., description="User email address")
     firstname: str = Field(..., description="User first name")
-    lastname: str = Field(..., description="User last name")
+    lastname: str = Field(default="", description="User last name (optional)")
 
 
 class UpdateRecentsRequest(BaseModel):
@@ -158,7 +158,7 @@ async def register_user(user_data: CreateUserRequest):
             "user_id": user_data.user_id,
             "email": user_data.email,
             "firstname": user_data.firstname,
-            "lastname": user_data.lastname,
+            "lastname": user_data.lastname if user_data.lastname else "",
             "created_at": datetime.now(timezone.utc),
             "couragePoints": 0,
             "plan": "free",
