@@ -134,7 +134,7 @@ async def get_victories(
                 "milestoneTitle": victory_doc.get("milestoneTitle", "Untitled"),
                 "dreamId": victory_doc["dreamId"],
                 "dreamCategory": victory_doc.get("dreamCategory", "achievement_goals"),
-                "evidenceSnippet": victory_doc.get("evidenceSnippet", ""),
+                "evidenceSnippet": victory_doc.get("evidenceSnippet"),  # Can be None
                 "confidenceBoost": victory_doc.get("confidenceBoost", 0),
                 "impactLevel": victory_doc.get("impactLevel", "medium"),
                 "completedDate": victory_doc.get("completedDate", ""),
@@ -278,7 +278,7 @@ async def create_victory(victory_data: CreateVictoryRequest):
             milestoneTitle=milestone.get("title", "Untitled Milestone"),
             dreamId=dream.get("thread_id", ""),
             dreamCategory=dream.get("category") or "achievement_goals",
-            evidenceSnippet=victory_data.evidenceSnippet,
+            evidenceSnippet=victory_data.evidenceSnippet if victory_data.evidenceSnippet else None,
             confidenceBoost=milestone.get("xp_points", 0),
             impactLevel=impact_level,
             completedDate=milestone.get("completedDate", get_current_iso_timestamp()),
@@ -336,7 +336,7 @@ async def get_victory(victoryId: str):
             milestoneTitle=victory_doc.get("milestoneTitle", "Untitled"),
             dreamId=victory_doc["dreamId"],
             dreamCategory=victory_doc.get("dreamCategory", "achievement_goals"),
-            evidenceSnippet=victory_doc.get("evidenceSnippet", ""),
+            evidenceSnippet=victory_doc.get("evidenceSnippet"),  # Can be None
             confidenceBoost=victory_doc.get("confidenceBoost", 0),
             impactLevel=victory_doc.get("impactLevel", "medium"),
             completedDate=victory_doc.get("completedDate", ""),

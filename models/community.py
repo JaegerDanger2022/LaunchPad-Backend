@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 class CreateVictoryRequest(BaseModel):
     """Request model for creating a victory card"""
     milestoneId: str = Field(..., description="ID of the completed milestone")
-    evidenceSnippet: str = Field(..., min_length=1, max_length=200, description="User's proof text, max 200 characters")
+    evidenceSnippet: Optional[str] = Field(None, max_length=200, description="User's proof text (optional), max 200 characters")
     isAnonymous: bool = Field(..., description="Whether to hide user identity")
     impact: Optional[Literal["critical", "high", "medium", "low"]] = Field(None, description="Impact level")
 
@@ -43,7 +43,7 @@ class VictoryCardResponse(BaseModel):
     dreamId: str
     dreamCategory: str
 
-    evidenceSnippet: str
+    evidenceSnippet: Optional[str] = None  # Optional - can be blank
     confidenceBoost: int  # From milestone XP
     impactLevel: str
 
@@ -127,7 +127,7 @@ class VictoryCardDB(BaseModel):
     dreamId: str
     dreamCategory: str
 
-    evidenceSnippet: str
+    evidenceSnippet: Optional[str] = None  # Optional - can be blank
     confidenceBoost: int
     impactLevel: str
 
