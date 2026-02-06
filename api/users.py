@@ -786,6 +786,56 @@ async def update_plan(user_id: str, update_data: UpdatePlanRequest):
         raise HTTPException(status_code=500, detail="Internal server error while updating plan")
 
 
+class UpdateTimezoneRequest(BaseModel):
+    """Request schema for updating user's timezone"""
+    pref_timezone: str = Field(..., description="User's preferred timezone (IANA timezone identifier)")
+
+
+@router.patch("/{user_id}/timezone", status_code=200, tags=["users"])
+async def update_timezone(user_id: str, update_data: UpdateTimezoneRequest):
+    """
+    Update a user's preferred timezone.
+
+    Args:
+        user_id: The user's unique identifier (Firebase UID)
+        update_data: Request body containing the new timezone
+
+    Returns:
+        dict: Success status and updated timezone
+
+    Raises:
+        404: User not found
+        500: Database error
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        result = await db.users.find_one_and_update(
+            {"user_id": user_id},
+            {"$set": {"pref_timezone": update_data.pref_timezone, "updated_at": datetime.now(timezone.utc)}},
+            return_document=True
+        )
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        logger.info(f"Updated timezone for user {user_id} to: {update_data.pref_timezone}")
+
+        return {
+            "success": True,
+            "message": f"Timezone updated to {update_data.pref_timezone}",
+            "pref_timezone": update_data.pref_timezone
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating timezone for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error while updating timezone")
+
+
 class UpdateActivityRequest(BaseModel):
     last_activity: str
 
