@@ -423,13 +423,11 @@ async def add_custom_milestone(thread_id: str, data: AddCustomMilestoneRequest):
     """
     Add a user-created milestone to a dream.
 
-    The milestone is stored in the top-level ``customMilestones`` array on the
-    dream document (separate from the AI-generated ``roadmap.milestones``).
-    Its ID is also appended to the ``dependencies`` list on the **last**
-    milestone in ``roadmap.milestones`` (typically the celebration_moment gate),
-    so the dream cannot be marked complete until every custom milestone is also
-    done.  ``metadata.total_xp`` is bumped by the new milestone's xp_points so
-    that the score == total_xp completion check stays accurate.
+    The milestone is inserted directly into ``roadmap.milestones`` array,
+    positioned BEFORE the last milestone (typically the celebration_moment).
+    The last milestone's dependencies are updated to include this new milestone
+    as a prerequisite, ensuring the dream cannot be completed until all custom
+    milestones are done. ``metadata.total_xp`` is bumped accordingly.
     """
     db = get_db()
     if db is None:
@@ -459,34 +457,52 @@ async def add_custom_milestone(thread_id: str, data: AddCustomMilestoneRequest):
             "is_custom": True,
         }
 
-        # 1. Push into customMilestones array
-        await db.dreams.update_one(
-            {"thread_id": thread_id},
-            {"$push": {"customMilestones": new_milestone}}
-        )
-
-        # 2. Add this milestone's ID to the dependencies of the last roadmap milestone
+        # Get current roadmap milestones
         roadmap_milestones = dream.get("roadmap", {}).get("milestones", [])
-        if roadmap_milestones:
-            last_index = len(roadmap_milestones) - 1
-            # Use positional-free dot notation with the concrete index
-            dep_path = f"roadmap.milestones.{last_index}.dependencies"
+
+        if not roadmap_milestones:
+            # No existing milestones - just append
             await db.dreams.update_one(
                 {"thread_id": thread_id},
-                {"$push": {dep_path: milestone_id}}
+                {"$push": {"roadmap.milestones": new_milestone}}
             )
-            logger.info(f"Added dependency {milestone_id} to roadmap milestone index {last_index}")
+        else:
+            # Insert BEFORE the last milestone
+            # We need to: 1) pop the last milestone, 2) push new one, 3) push last one back
+            # OR we can fetch, modify array in Python, and replace entire array
 
-        # 3. Bump metadata.total_xp so score == total_xp check stays correct
+            # Fetch full milestones, insert before last, update entire array
+            updated_milestones = roadmap_milestones.copy()
+            last_milestone = updated_milestones.pop()  # Remove last
+            updated_milestones.append(new_milestone)    # Add custom milestone
+            updated_milestones.append(last_milestone)   # Add last back
+
+            # Update the entire milestones array
+            await db.dreams.update_one(
+                {"thread_id": thread_id},
+                {"$set": {"roadmap.milestones": updated_milestones}}
+            )
+
+            # Update the last milestone's dependencies to include this new custom milestone
+            last_index = len(updated_milestones) - 1
+            dep_path = f"roadmap.milestones.{last_index}.dependencies"
+
+            # Get current dependencies of the last milestone
+            current_deps = last_milestone.get("dependencies", [])
+            if milestone_id not in current_deps:
+                current_deps.append(milestone_id)
+                await db.dreams.update_one(
+                    {"thread_id": thread_id},
+                    {"$set": {dep_path: current_deps}}
+                )
+                logger.info(f"Added dependency {milestone_id} to last milestone (index {last_index})")
+
+        # Bump metadata.total_xp so score == total_xp check stays correct
         current_total_xp = dream.get("metadata", {}).get("total_xp", 0)
         # If total_xp was never set, compute it from all existing roadmap milestones first
         if current_total_xp == 0:
             current_total_xp = sum(
                 m.get("xp_points", 0) for m in roadmap_milestones
-            )
-            # Also add any previously existing custom milestones
-            current_total_xp += sum(
-                m.get("xp_points", 0) for m in dream.get("customMilestones", [])
             )
         new_total_xp = current_total_xp + xp_points
         await db.dreams.update_one(
@@ -496,16 +512,16 @@ async def add_custom_milestone(thread_id: str, data: AddCustomMilestoneRequest):
 
         logger.info(f"Added custom milestone {milestone_id} to dream {thread_id}. total_xp now {new_total_xp}")
 
-        # Return the full updated customMilestones list
+        # Return the updated milestones array from roadmap
         updated_dream = await db.dreams.find_one(
             {"thread_id": thread_id},
-            {"customMilestones": 1}
+            {"roadmap.milestones": 1}
         )
 
         return {
             "success": True,
             "milestone": new_milestone,
-            "milestones": updated_dream.get("customMilestones", [])
+            "milestones": updated_dream.get("roadmap", {}).get("milestones", [])
         }
 
     except HTTPException:
