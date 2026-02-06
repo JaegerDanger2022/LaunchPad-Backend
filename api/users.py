@@ -28,6 +28,7 @@ class CreateUserRequest(BaseModel):
     email: str = Field(..., description="User email address")
     firstname: str = Field(..., description="User first name")
     lastname: str = Field(default="", description="User last name (optional)")
+    pref_timezone: Optional[str] = Field(default=None, description="User's preferred timezone (IANA timezone identifier)")
 
 
 class UpdateRecentsRequest(BaseModel):
@@ -163,6 +164,7 @@ async def register_user(user_data: CreateUserRequest):
             "couragePoints": 0,
             "plan": "free",
             "dreams_metadata": [],
+            "pref_timezone": user_data.pref_timezone,
             "communityProfile": {
                 "location": None,
                 "age": None,
