@@ -248,7 +248,13 @@ async def update_dream(thread_id: str, update_data: UpdateDreamRequest):
             update_doc["isComplete"] = update_data.isComplete
 
         if update_data.roadmap is not None:
-            update_doc["roadmap"] = update_data.roadmap
+            # If roadmap contains milestones, update them specifically
+            # to preserve other roadmap fields
+            if "milestones" in update_data.roadmap:
+                update_doc["roadmap.milestones"] = update_data.roadmap["milestones"]
+            else:
+                # If full roadmap replacement is intended
+                update_doc["roadmap"] = update_data.roadmap
 
         # Update dreams collection
         result = await db.dreams.update_one(
