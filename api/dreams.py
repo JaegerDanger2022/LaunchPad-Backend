@@ -67,6 +67,7 @@ class CreateCustomDreamRequest(BaseModel):
     """Request schema for creating a custom DIY dream"""
     user_id: str = Field(..., description="Unique user identifier")
     dream_title: str = Field(..., min_length=1, max_length=100, description="The dream title")
+    card_color: Optional[str] = Field(None, description="User-selected card color (hex color like #A855F7)")
     milestones: List[CustomMilestone] = Field(..., min_items=1, description="List of custom milestones")
 
 
@@ -304,9 +305,8 @@ async def create_custom_dream(dream_data: CreateCustomDreamRequest):
         thread_id = str(uuid.uuid4())
         logger.info(f"Generated thread_id: {thread_id}")
 
-        # Create milestone documents with sequential dependencies
+        # Create milestone documents with NO dependencies (user controls unlocking manually)
         milestone_docs = []
-        prev_milestone_id = None
         total_xp = 0
 
         for milestone_data in sorted(dream_data.milestones, key=lambda x: x.order):
@@ -323,16 +323,15 @@ async def create_custom_dream(dream_data: CreateCustomDreamRequest):
                 "order": milestone_data.order,
                 "time_estimate": "30 min",
                 "xp_points": xp_points,
-                "streak_eligible": True,
-                "dependencies": [prev_milestone_id] if prev_milestone_id else [],
+                "streak_eligible": False,  # Custom milestones are NOT streak-eligible
+                "dependencies": [],  # No dependencies - all milestones are unlocked
                 "is_custom": True,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc)
             }
             milestone_docs.append(milestone_doc)
-            prev_milestone_id = milestone_id
 
-        logger.info(f"Created {len(milestone_docs)} milestone documents")
+        logger.info(f"Created {len(milestone_docs)} milestone documents with no dependencies")
 
         # Create dream document
         dream_doc = {
@@ -341,6 +340,7 @@ async def create_custom_dream(dream_data: CreateCustomDreamRequest):
             "dream": dream_data.dream_title,
             "status": "active",
             "category": "custom",
+            "dream_card_bg": dream_data.card_color,  # User-selected card color
             "is_custom": True,
             "isComplete": False,
             "created_at": datetime.now(timezone.utc),
@@ -393,7 +393,7 @@ async def create_custom_dream(dream_data: CreateCustomDreamRequest):
                 "time_estimate": first_milestone["time_estimate"],
                 "xp_points": first_milestone["xp_points"],
                 "challenge_type": first_milestone["challenge_type"],
-                "streak_eligible": first_milestone["streak_eligible"],
+                "streak_eligible": False,  # Custom milestones are NOT streak-eligible
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }
             await db.users.update_one(
