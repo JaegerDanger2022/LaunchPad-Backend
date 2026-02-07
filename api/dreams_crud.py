@@ -28,6 +28,7 @@ class AddCustomMilestoneRequest(BaseModel):
     """Request schema for adding a user-created milestone"""
     title: str = Field(..., min_length=1, max_length=60)
     challenge_type: str = Field(...)
+    description: Optional[str] = Field(None, max_length=200)
 
 
 @router.get("", tags=["dreams-crud"])
@@ -451,7 +452,7 @@ async def add_custom_milestone(thread_id: str, data: AddCustomMilestoneRequest):
             "status": "not_started",
             "xp_points": xp_points,
             "time_estimate": "30 mins",
-            "description": "Custom milestone",
+            "description": data.description or "Custom milestone",
             "motivation_hook": "",
             "streak_eligible": False,
             "is_custom": True,
