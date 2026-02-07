@@ -174,6 +174,14 @@ async def update_milestone_status(
 
         logger.info(f"Successfully updated milestone {milestone_id} to status: {update_data.status}")
 
+        # Update last_activity timestamp when milestone is completed
+        if update_data.status == "completed":
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {"last_activity": datetime.now(timezone.utc).isoformat()}}
+            )
+            logger.info(f"Updated last_activity for user {user_id} after milestone completion")
+
         # ---------------------------------------------------------------------------
         # Build response
         # ---------------------------------------------------------------------------

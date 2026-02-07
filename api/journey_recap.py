@@ -107,13 +107,18 @@ async def create_journey_recap(
         user_display_name = "Anonymous"
         user_location = None
         user_age = None
+        pref_timezone = None
 
-        if not journey_data.isAnonymous:
-            user_doc = await db.users.find_one(
-                {"user_id": user_id},
-                {"firstname": 1, "communityProfile": 1}
-            )
-            if user_doc:
+        # Always fetch timezone for anonymous posts (but not name/location/age)
+        user_doc = await db.users.find_one(
+            {"user_id": user_id},
+            {"firstname": 1, "communityProfile": 1, "pref_timezone": 1}
+        )
+
+        if user_doc:
+            pref_timezone = user_doc.get("pref_timezone")
+
+            if not journey_data.isAnonymous:
                 user_display_name = user_doc.get("firstname", "User")
                 community_profile = user_doc.get("communityProfile", {})
                 user_location = community_profile.get("location")
@@ -125,6 +130,7 @@ async def create_journey_recap(
             "userDisplayName": user_display_name,
             "userLocation": user_location,
             "userAge": user_age,
+            "prefTimezone": pref_timezone,
             "dreamId": journey_data.dreamId,
             "dreamTitle": dream.get("dream", ""),
             "dreamCategory": dream.get("category", "achievement_goals"),

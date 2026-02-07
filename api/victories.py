@@ -130,6 +130,7 @@ async def get_victories(
                 "userDisplayName": victory_doc.get("userDisplayName", "Anonymous"),
                 "userLocation": victory_doc.get("userLocation"),
                 "userAge": victory_doc.get("userAge"),
+                "prefTimezone": victory_doc.get("prefTimezone"),
                 "milestoneId": victory_doc["milestoneId"],
                 "milestoneTitle": victory_doc.get("milestoneTitle", "Untitled"),
                 "dreamId": victory_doc["dreamId"],
@@ -157,6 +158,7 @@ async def get_victories(
                 "userDisplayName": journey_doc.get("userDisplayName", "Anonymous"),
                 "userLocation": journey_doc.get("userLocation"),
                 "userAge": journey_doc.get("userAge"),
+                "prefTimezone": journey_doc.get("prefTimezone"),
                 "dreamId": journey_doc["dreamId"],
                 "dreamTitle": journey_doc.get("dreamTitle", "Untitled Dream"),
                 "dreamCategory": journey_doc.get("dreamCategory", "achievement_goals"),
@@ -249,13 +251,18 @@ async def create_victory(victory_data: CreateVictoryRequest):
         user_display_name = "Anonymous"
         user_location = None
         user_age = None
+        pref_timezone = None
 
-        if not victory_data.isAnonymous:
-            user_doc = await db.users.find_one(
-                {"user_id": user_id},
-                {"firstname": 1, "communityProfile": 1}
-            )
-            if user_doc:
+        # Always fetch timezone for anonymous posts (but not name/location/age)
+        user_doc = await db.users.find_one(
+            {"user_id": user_id},
+            {"firstname": 1, "communityProfile": 1, "pref_timezone": 1}
+        )
+
+        if user_doc:
+            pref_timezone = user_doc.get("pref_timezone")
+
+            if not victory_data.isAnonymous:
                 user_display_name = user_doc.get("firstname", "Anonymous")
                 community_profile = user_doc.get("communityProfile", {})
                 user_location = community_profile.get("location")
@@ -274,6 +281,7 @@ async def create_victory(victory_data: CreateVictoryRequest):
             userDisplayName=user_display_name,
             userLocation=user_location,
             userAge=user_age,
+            prefTimezone=pref_timezone,
             milestoneId=victory_data.milestoneId,
             milestoneTitle=milestone.get("title", "Untitled Milestone"),
             dreamId=dream.get("thread_id", ""),
@@ -332,6 +340,7 @@ async def get_victory(victoryId: str):
             userDisplayName=victory_doc.get("userDisplayName", "Anonymous"),
             userLocation=victory_doc.get("userLocation"),
             userAge=victory_doc.get("userAge"),
+            prefTimezone=victory_doc.get("prefTimezone"),
             milestoneId=victory_doc["milestoneId"],
             milestoneTitle=victory_doc.get("milestoneTitle", "Untitled"),
             dreamId=victory_doc["dreamId"],

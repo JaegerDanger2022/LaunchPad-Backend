@@ -17,6 +17,7 @@ from api.journey_recap import router as journey_recap_router
 from api.conversation import router as conversation_router
 from api import migration_temp
 from core.database import connect_db, close_db
+from services.notification_scheduler import start_notification_scheduler, stop_notification_scheduler
 
 load_dotenv()
 
@@ -45,12 +46,18 @@ async def lifespan(app: FastAPI):
     try:
         await connect_db()
         logger.info("[STARTUP] Database connection completed")
+
+        # Start notification scheduler
+        start_notification_scheduler()
+        logger.info("[STARTUP] Notification scheduler started")
     except Exception as e:
-        logger.error(f"[STARTUP] Database connection failed: {e}", exc_info=True)
+        logger.error(f"[STARTUP] Startup failed: {e}", exc_info=True)
         raise
     yield
     # Shutdown
     logger.info("Shutting down...")
+    stop_notification_scheduler()
+    logger.info("[SHUTDOWN] Notification scheduler stopped")
     await close_db()
 
 

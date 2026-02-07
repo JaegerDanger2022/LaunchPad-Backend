@@ -29,6 +29,7 @@ class CreateUserRequest(BaseModel):
     firstname: str = Field(..., description="User first name")
     lastname: str = Field(default="", description="User last name (optional)")
     pref_timezone: Optional[str] = Field(default=None, description="User's preferred timezone (IANA timezone identifier)")
+    pref_notification_time: Optional[str] = Field(default=None, description="User's preferred notification time in 24-hour format (HH:MM), null if disabled")
 
 
 class UpdateRecentsRequest(BaseModel):
@@ -165,6 +166,8 @@ async def register_user(user_data: CreateUserRequest):
             "plan": "free",
             "dreams_metadata": [],
             "pref_timezone": user_data.pref_timezone,
+            "pref_notification_time": user_data.pref_notification_time,
+            "last_activity": None,
             "communityProfile": {
                 "location": None,
                 "age": None,
@@ -834,6 +837,76 @@ async def update_timezone(user_id: str, update_data: UpdateTimezoneRequest):
     except Exception as e:
         logger.error(f"Error updating timezone for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error while updating timezone")
+
+
+class UpdateNotificationPreferencesRequest(BaseModel):
+    """Request schema for updating notification preferences"""
+    pref_notification_time: Optional[str] = Field(..., description="Preferred notification time in HH:MM format (24-hour), or null to disable")
+
+
+@router.patch("/{user_id}/notification-preferences", status_code=200, tags=["users"])
+async def update_notification_preferences(user_id: str, update_data: UpdateNotificationPreferencesRequest):
+    """
+    Update a user's notification preferences (daily reminder time).
+
+    Args:
+        user_id: The user's unique identifier (Firebase UID)
+        update_data: Request body containing the notification time preference (HH:MM or null)
+
+    Returns:
+        dict: Success status and updated notification time
+
+    Raises:
+        400: Invalid time format
+        404: User not found
+        500: Database error
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        # Validate time format if provided (HH:MM in 24-hour format)
+        if update_data.pref_notification_time is not None:
+            time_parts = update_data.pref_notification_time.split(":")
+            if len(time_parts) != 2:
+                raise HTTPException(status_code=400, detail="Invalid time format. Expected HH:MM")
+            try:
+                hour, minute = int(time_parts[0]), int(time_parts[1])
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid time format. Hour must be 0-23, minute must be 0-59"
+                )
+
+        result = await db.users.find_one_and_update(
+            {"user_id": user_id},
+            {"$set": {
+                "pref_notification_time": update_data.pref_notification_time,
+                "updated_at": datetime.now(timezone.utc)
+            }},
+            return_document=True
+        )
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        status_msg = "disabled" if update_data.pref_notification_time is None else f"set to {update_data.pref_notification_time}"
+        logger.info(f"Updated notification preferences for user {user_id}: {status_msg}")
+
+        return {
+            "success": True,
+            "message": f"Notification preferences {status_msg}",
+            "pref_notification_time": update_data.pref_notification_time
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating notification preferences for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error while updating notification preferences")
 
 
 class UpdateActivityRequest(BaseModel):

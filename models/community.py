@@ -37,6 +37,7 @@ class VictoryCardResponse(BaseModel):
     userDisplayName: str
     userLocation: Optional[str] = None
     userAge: Optional[int] = None
+    prefTimezone: Optional[str] = None
 
     milestoneId: str
     milestoneTitle: str
@@ -121,6 +122,7 @@ class VictoryCardDB(BaseModel):
     userDisplayName: str
     userLocation: Optional[str] = None
     userAge: Optional[int] = None
+    prefTimezone: Optional[str] = None
 
     milestoneId: str
     milestoneTitle: str
