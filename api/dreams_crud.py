@@ -89,6 +89,7 @@ async def get_user_dreams(
                 "isComplete": 1,
                 "dream_image_bytes": 1,
                 "dream_card_bg": 1,
+                "is_custom": 1,  # ✅ Include is_custom flag for custom dream image detection
             }
 
         # Fetch dreams
