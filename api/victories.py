@@ -133,6 +133,7 @@ async def get_victories(
                 "prefTimezone": victory_doc.get("prefTimezone"),
                 "milestoneId": victory_doc["milestoneId"],
                 "milestoneTitle": victory_doc.get("milestoneTitle", "Untitled"),
+                "challengeType": victory_doc.get("challengeType"),  # Include challenge type from milestone
                 "dreamId": victory_doc["dreamId"],
                 "dreamCategory": victory_doc.get("dreamCategory", "achievement_goals"),
                 "evidenceSnippet": victory_doc.get("evidenceSnippet"),  # Can be None
@@ -284,8 +285,9 @@ async def create_victory(victory_data: CreateVictoryRequest):
             prefTimezone=pref_timezone,
             milestoneId=victory_data.milestoneId,
             milestoneTitle=milestone.get("title", "Untitled Milestone"),
+            challengeType=milestone.get("challenge_type"),  # Include challenge type from milestone
             dreamId=dream.get("thread_id", ""),
-            dreamCategory=dream.get("category") or "achievement_goals",
+            dreamCategory=dream.get("roadmap", {}).get("category") or "achievement_goals",
             evidenceSnippet=victory_data.evidenceSnippet if victory_data.evidenceSnippet else None,
             confidenceBoost=milestone.get("xp_points", 0),
             impactLevel=impact_level,
@@ -343,6 +345,7 @@ async def get_victory(victoryId: str):
             prefTimezone=victory_doc.get("prefTimezone"),
             milestoneId=victory_doc["milestoneId"],
             milestoneTitle=victory_doc.get("milestoneTitle", "Untitled"),
+            challengeType=victory_doc.get("challengeType"),  # Include challenge type
             dreamId=victory_doc["dreamId"],
             dreamCategory=victory_doc.get("dreamCategory", "achievement_goals"),
             evidenceSnippet=victory_doc.get("evidenceSnippet"),  # Can be None

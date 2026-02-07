@@ -133,7 +133,7 @@ async def create_journey_recap(
             "prefTimezone": pref_timezone,
             "dreamId": journey_data.dreamId,
             "dreamTitle": dream.get("dream", ""),
-            "dreamCategory": dream.get("category", "achievement_goals"),
+            "dreamCategory": dream.get("roadmap", {}).get("category", "achievement_goals"),
             "journeyStory": journey_data.journeyStory,
             "totalMilestones": total_milestones,
             "durationDays": duration_days,

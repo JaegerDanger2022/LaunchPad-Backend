@@ -41,6 +41,7 @@ class VictoryCardResponse(BaseModel):
 
     milestoneId: str
     milestoneTitle: str
+    challengeType: Optional[str] = None  # Challenge type from milestone (e.g., "power_move", "prep_ritual")
     dreamId: str
     dreamCategory: str
 
@@ -126,6 +127,7 @@ class VictoryCardDB(BaseModel):
 
     milestoneId: str
     milestoneTitle: str
+    challengeType: Optional[str] = None  # Challenge type from milestone (e.g., "power_move", "prep_ritual")
     dreamId: str
     dreamCategory: str
 
@@ -151,10 +153,11 @@ class VictoryCardDB(BaseModel):
             userDisplayName=self.userDisplayName,
             userLocation=self.userLocation,
             userAge=self.userAge,
+            prefTimezone=self.prefTimezone,
             milestoneId=self.milestoneId,
             milestoneTitle=self.milestoneTitle,
+            challengeType=self.challengeType,
             dreamId=self.dreamId,
-            dreamTitle=self.dreamTitle,
             dreamCategory=self.dreamCategory,
             evidenceSnippet=self.evidenceSnippet,
             confidenceBoost=self.confidenceBoost,
