@@ -16,6 +16,7 @@ from api.community import router as community_router
 from api.journey_recap import router as journey_recap_router
 from api.conversation import router as conversation_router
 from api import migration_temp
+from api.admin_migrations import router as admin_migrations_router
 from core.database import connect_db, close_db
 from services.notification_scheduler import start_notification_scheduler, stop_notification_scheduler
 
@@ -102,6 +103,7 @@ app.include_router(community_router, prefix="/api", tags=["community"])
 app.include_router(journey_recap_router, prefix="/api/journey-recaps", tags=["journey-recap"])
 app.include_router(conversation_router, prefix="/api/conversation", tags=["conversation"])
 app.include_router(migration_temp.router, prefix="/api/migration", tags=["migration-temp"])
+app.include_router(admin_migrations_router, prefix="/api/admin", tags=["admin-migrations"])
 
 
 @app.get("/health", tags=["health"])
