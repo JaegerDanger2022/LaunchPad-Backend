@@ -242,6 +242,20 @@ class ToggleMeTooResponse(BaseModel):
     added: bool  # true if added, false if removed
 
 
+class TogglePinResponse(BaseModel):
+    """Response for toggling pin to inspiration"""
+    success: bool
+    pinned: bool  # true if pinned, false if unpinned
+
+
+class PinnedInspirationDB(BaseModel):
+    """Pinned inspiration database document (separate from Me Too)"""
+    id: str
+    victoryCardId: str
+    userId: str
+    createdAt: str  # ISO date
+
+
 class InspirationItem(BaseModel):
     """Single inspiration item in user's list"""
     id: str  # Victory card ID
@@ -307,6 +321,12 @@ def generate_metoo_id() -> str:
     """Generate a unique Me Too ID"""
     import uuid
     return f"metoo_{uuid.uuid4().hex[:12]}"
+
+
+def generate_pin_id() -> str:
+    """Generate a unique pinned inspiration ID"""
+    import uuid
+    return f"pin_{uuid.uuid4().hex[:12]}"
 
 
 def get_permission_text(permission_type: int, dream_category: str) -> str:

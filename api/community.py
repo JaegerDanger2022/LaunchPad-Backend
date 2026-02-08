@@ -14,7 +14,11 @@ from models.community import (
     InspirationItem,
     VictoriesListResponse,
     VictoryCardResponse,
-    PaginationInfo
+    PaginationInfo,
+    TogglePinResponse,
+    PinnedInspirationDB,
+    generate_pin_id,
+    get_current_iso_timestamp,
 )
 
 logger = logging.getLogger(__name__)
@@ -234,18 +238,17 @@ async def get_user_inspiration(
     limit: int = Query(10, ge=1, le=50, description="Number of items per page")
 ):
     """
-    Retrieves all victory cards that the user has saved by clicking "Me Too"
+    Retrieves all victory cards that the user has pinned to inspiration.
 
     This endpoint returns full victory card objects with hasUserBoosted and
     hasUserMeTooed fields calculated for the requesting user.
 
     Business Logic:
-    1. Query me_toos collection for user's entries
+    1. Query pinned_inspirations collection for user's entries
     2. Join with victory_cards to get full victory details
-    3. Calculate hasUserBoosted by checking courage_boosts collection
-    4. Set hasUserMeTooed to true for all results
-    5. Sort by me_too.createdAt DESC (most recently saved first)
-    6. Apply pagination
+    3. Calculate hasUserBoosted and hasUserMeTooed
+    4. Sort by pin createdAt DESC (most recently pinned first)
+    5. Apply pagination
     """
     try:
         db = get_db()
@@ -258,22 +261,22 @@ async def get_user_inspiration(
         # Calculate pagination
         skip = (page - 1) * limit
 
-        # Get total count
-        total_count = await db.me_toos.count_documents({"userId": user_id})
-        total_pages = (total_count + limit - 1) // limit  # Ceiling division
+        # Get total count from pinned_inspirations
+        total_count = await db.pinned_inspirations.count_documents({"userId": user_id})
+        total_pages = max(1, (total_count + limit - 1) // limit)
 
-        # Query Me Toos with pagination, sorted by newest first
-        metoos_cursor = db.me_toos.find(
+        # Query pinned inspirations with pagination, sorted by newest first
+        pins_cursor = db.pinned_inspirations.find(
             {"userId": user_id}
         ).sort("createdAt", -1).skip(skip).limit(limit)
 
-        metoos_list = await metoos_cursor.to_list(length=limit)
+        pins_list = await pins_cursor.to_list(length=limit)
 
         # Fetch corresponding victory cards with all details
         victories = []
 
-        for metoo in metoos_list:
-            victory_doc = await db.victory_cards.find_one({"id": metoo["victoryCardId"]})
+        for pin in pins_list:
+            victory_doc = await db.victory_cards.find_one({"id": pin["victoryCardId"]})
 
             if not victory_doc:
                 continue
@@ -285,8 +288,12 @@ async def get_user_inspiration(
             })
             has_user_boosted = boost_exists is not None
 
-            # hasUserMeTooed is always true for this endpoint
-            has_user_metooed = True
+            # Check if user has Me Too'd this victory
+            metoo_exists = await db.me_toos.find_one({
+                "victoryCardId": victory_doc["id"],
+                "userId": user_id
+            })
+            has_user_metooed = metoo_exists is not None
 
             # Build VictoryCardResponse
             victory_response = VictoryCardResponse(
@@ -314,7 +321,7 @@ async def get_user_inspiration(
 
             victories.append(victory_response)
 
-        logger.info(f"Retrieved {len(victories)} inspiration victories for user {user_id} (page {page})")
+        logger.info(f"Retrieved {len(victories)} pinned inspiration victories for user {user_id} (page {page})")
 
         # Build pagination info
         pagination = PaginationInfo(
@@ -333,4 +340,65 @@ async def get_user_inspiration(
         raise
     except Exception as e:
         logger.error(f"Error fetching inspiration for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/users/{user_id}/inspiration/{item_id}", response_model=TogglePinResponse, tags=["community"])
+async def toggle_pin_inspiration(user_id: str, item_id: str):
+    """
+    Toggle pin/save a victory card to the user's inspiration list.
+
+    This is separate from Me Too (resonance). Pinning saves the card
+    to the user's inspiration tab without affecting the resonance count.
+
+    Business Logic:
+    1. Validate user and victory card exist
+    2. Check if already pinned in pinned_inspirations collection
+       - If pinned: remove pin
+       - If not pinned: add pin
+    3. Return success and new pinned state
+    """
+    try:
+        db = get_db()
+
+        # Validate user exists
+        user = await db.users.find_one({"user_id": user_id})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Validate victory card exists
+        victory = await db.victory_cards.find_one({"id": item_id})
+        if not victory:
+            raise HTTPException(status_code=404, detail="Victory card not found")
+
+        # Check if already pinned
+        existing_pin = await db.pinned_inspirations.find_one({
+            "victoryCardId": item_id,
+            "userId": user_id,
+        })
+
+        if existing_pin:
+            # Unpin (toggle off)
+            await db.pinned_inspirations.delete_one({
+                "victoryCardId": item_id,
+                "userId": user_id,
+            })
+            logger.info(f"Unpinned inspiration: user {user_id} from victory {item_id}")
+            return TogglePinResponse(success=True, pinned=False)
+        else:
+            # Pin (toggle on)
+            pin = PinnedInspirationDB(
+                id=generate_pin_id(),
+                victoryCardId=item_id,
+                userId=user_id,
+                createdAt=get_current_iso_timestamp(),
+            )
+            await db.pinned_inspirations.insert_one(pin.model_dump())
+            logger.info(f"Pinned inspiration: user {user_id} to victory {item_id}")
+            return TogglePinResponse(success=True, pinned=True)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error toggling pin for user {user_id}, victory {item_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
