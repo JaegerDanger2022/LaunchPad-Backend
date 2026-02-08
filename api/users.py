@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from pymongo.errors import DuplicateKeyError
 from core.database import get_db
+from services.notification_service import send_welcome_notification
 
 logger = logging.getLogger(__name__)
 
@@ -995,5 +996,47 @@ async def save_push_token(user_id: str, data: SavePushTokenRequest):
         raise
     except Exception as e:
         logger.error(f"Error saving push token for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/{user_id}/welcome-notification", status_code=200, tags=["users"])
+async def send_welcome(user_id: str):
+    """
+    Send a welcome push notification to a newly registered user.
+
+    Called by the frontend after the push token has been saved during signup.
+
+    Args:
+        user_id: The user's unique identifier
+
+    Returns:
+        dict: Success status and send count
+
+    Raises:
+        404: User not found
+        500: Server error
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        user = await db.users.find_one({"user_id": user_id})
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        result = await send_welcome_notification(user_id)
+
+        logger.info(f"Welcome notification result for user {user_id}: {result}")
+        return {
+            "success": result["sent"] > 0,
+            "message": f"Welcome notification sent ({result['sent']} delivered)",
+            "sent": result["sent"],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending welcome notification for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 

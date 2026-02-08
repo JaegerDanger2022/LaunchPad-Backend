@@ -35,6 +35,11 @@ INACTIVITY_MESSAGES = [
     {"title": "Don't let your streak slip", "body": "You haven't checked off any milestones in 2 days."},
 ]
 
+WELCOME_MESSAGE = {
+    "title": "Welcome to PacksLight! 🎒",
+    "body": "You're all set. Create your first dream and start turning it into reality."
+}
+
 
 async def send_expo_push(tokens: List[str], title: str, body: str, data: Optional[Dict] = None, channel_id: str = "default") -> Dict:
     """
@@ -319,6 +324,47 @@ class NotificationService:
             logger.info(f"[NotificationService] Removed {len(invalid_tokens)} invalid tokens for user {user_id}")
         except Exception as e:
             logger.error(f"Error removing invalid tokens for user {user_id}: {e}")
+
+
+async def send_welcome_notification(user_id: str) -> Dict:
+    """
+    Send a welcome push notification to a newly registered user.
+
+    Args:
+        user_id: The user's unique identifier
+
+    Returns:
+        dict with send results
+    """
+    db = get_db()
+    if db is None:
+        logger.error("[WelcomeNotification] Database not available")
+        return {"sent": 0, "errors": 1}
+
+    user = await db.users.find_one({"user_id": user_id})
+    if not user:
+        logger.warning(f"[WelcomeNotification] User not found: {user_id}")
+        return {"sent": 0, "errors": 1}
+
+    tokens = user.get("push_tokens", [])
+    if not tokens:
+        logger.info(f"[WelcomeNotification] No push tokens for user {user_id}")
+        return {"sent": 0, "errors": 0}
+
+    result = await send_expo_push(
+        tokens=tokens,
+        title=WELCOME_MESSAGE["title"],
+        body=WELCOME_MESSAGE["body"],
+        data={"type": "welcome", "screen": "Home"},
+        channel_id="default",
+    )
+
+    if result["sent"] > 0:
+        logger.info(f"[WelcomeNotification] Welcome notification sent to user {user_id}")
+    else:
+        logger.warning(f"[WelcomeNotification] Failed to send welcome notification to user {user_id}")
+
+    return result
 
 
 # Global instance (initialized on first use after DB is ready)
