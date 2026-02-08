@@ -78,6 +78,32 @@ def parse_categories_filter(categories: Optional[str]) -> dict:
 # VICTORY CARD ENDPOINTS
 # ====================
 
+@router.get("/check", tags=["victories"])
+async def check_victory_exists(
+    user_id: str = Query(..., description="User ID to check"),
+    milestone_id: str = Query(..., description="Milestone ID to check")
+):
+    """
+    Check if a user has already posted a victory for a specific milestone
+
+    Returns:
+    - exists: boolean indicating if victory exists
+    """
+    try:
+        db = get_db()
+
+        existing_victory = await db.victory_cards.find_one({
+            "userId": user_id,
+            "milestoneId": milestone_id
+        })
+
+        return {"exists": existing_victory is not None}
+
+    except Exception as e:
+        logger.error(f"Error checking victory existence: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.get("", tags=["victories"])
 async def get_victories(
     page: int = Query(1, ge=1, description="Page number"),
@@ -242,10 +268,14 @@ async def create_victory(victory_data: CreateVictoryRequest):
         if milestone.get("status") != "completed":
             raise HTTPException(status_code=400, detail="Milestone must be completed to create a victory")
 
-        # 4. Check if victory already exists for this milestone within this dream
-        existing_victory = await db.victory_cards.find_one({"milestoneId": victory_data.milestoneId, "dreamId": dream["thread_id"]})
+        # 4. Check if THIS USER already has a victory for this milestone
+        # Multiple users can post victories for the same milestone, but each user can only post once per milestone
+        existing_victory = await db.victory_cards.find_one({
+            "milestoneId": victory_data.milestoneId,
+            "userId": user_id
+        })
         if existing_victory:
-            raise HTTPException(status_code=409, detail="Victory already exists for this milestone")
+            raise HTTPException(status_code=409, detail="You have already posted a victory for this milestone")
 
         # 5. Extract user data
         user_id = dream["user_id"]
