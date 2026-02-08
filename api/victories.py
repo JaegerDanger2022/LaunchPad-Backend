@@ -254,21 +254,34 @@ async def create_victory(victory_data: CreateVictoryRequest):
         if not dream:
             raise HTTPException(status_code=404, detail="Milestone not found")
 
-        # 2. Extract milestone from the dream
+        # 2. Extract milestone from the dream (check both roadmap and customMilestones)
+        roadmap_milestones = dream.get("roadmap", {}).get("milestones", [])
+        custom_milestones = dream.get("customMilestones", [])
+        all_milestones = roadmap_milestones + custom_milestones
+
         milestone = next(
-            (m for m in dream.get("roadmap", {}).get("milestones", [])
-             if m.get("id") == victory_data.milestoneId),
+            (m for m in all_milestones if m.get("id") == victory_data.milestoneId),
             None
         )
 
         if not milestone:
+            logger.error(f"Milestone {victory_data.milestoneId} not found in dream {dream.get('thread_id')}")
+            logger.error(f"Available milestone IDs: {[m.get('id') for m in all_milestones]}")
             raise HTTPException(status_code=404, detail="Milestone not found in dream")
 
         # 3. Validate milestone is completed
-        if milestone.get("status") != "completed":
-            raise HTTPException(status_code=400, detail="Milestone must be completed to create a victory")
+        milestone_status = milestone.get("status")
+        logger.info(f"Milestone {victory_data.milestoneId} current status: {milestone_status}")
 
-        # 4. Check if THIS USER already has a victory for this milestone
+        if milestone_status != "completed":
+            logger.error(f"Milestone status is '{milestone_status}', not 'completed'. Cannot create victory.")
+            logger.error(f"Milestone data: {milestone}")
+            raise HTTPException(status_code=400, detail=f"Milestone must be completed to create a victory (current status: {milestone_status})")
+
+        # 4. Extract user ID from dream
+        user_id = dream["user_id"]
+
+        # 5. Check if THIS USER already has a victory for this milestone
         # Multiple users can post victories for the same milestone, but each user can only post once per milestone
         existing_victory = await db.victory_cards.find_one({
             "milestoneId": victory_data.milestoneId,
@@ -277,8 +290,7 @@ async def create_victory(victory_data: CreateVictoryRequest):
         if existing_victory:
             raise HTTPException(status_code=409, detail="You have already posted a victory for this milestone")
 
-        # 5. Extract user data
-        user_id = dream["user_id"]
+        # 6. Extract additional user data for display
         user_display_name = "Anonymous"
         user_location = None
         user_age = None
