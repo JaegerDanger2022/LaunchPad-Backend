@@ -304,6 +304,7 @@ async def get_user_inspiration(
                 userAge=victory_doc.get("userAge"),
                 milestoneId=victory_doc["milestoneId"],
                 milestoneTitle=victory_doc.get("milestoneTitle", "Untitled"),
+                challengeType=victory_doc.get("challengeType"),
                 dreamId=victory_doc["dreamId"],
                 dreamCategory=victory_doc.get("dreamCategory", "achievement_goals"),
                 evidenceSnippet=victory_doc.get("evidenceSnippet", ""),
