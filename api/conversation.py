@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 
 from core.database import get_db
 from api.dreams import create_dream, CreateDreamRequest
+from services.notification_service import send_expo_push
 
 load_dotenv()
 
@@ -362,6 +363,23 @@ async def _trigger_roadmap_workflow(user_id: str, enriched_context: dict):
 
         await create_dream(dream_data)
         logger.info("[CONVERSATION /turn] roadmap workflow triggered for user %s", user_id)
+
+        # Send push notification to let the user know their dream is ready
+        try:
+            push_tokens = (user or {}).get("push_tokens", [])
+            if push_tokens:
+                await send_expo_push(
+                    tokens=push_tokens,
+                    title="Your dream is ready!",
+                    body="Luna finished building your roadmap. Jump in and start your first milestone.",
+                    data={"type": "dream_ready", "user_id": user_id},
+                )
+                logger.info("[CONVERSATION /turn] dream-ready notification sent to user %s", user_id)
+            else:
+                logger.info("[CONVERSATION /turn] no push tokens for user %s, skipping notification", user_id)
+        except Exception as notif_exc:
+            logger.warning("[CONVERSATION /turn] dream-ready notification failed: %s", notif_exc)
+
     except Exception as exc:
         # Non-fatal — conversation already completed successfully for the user.
         logger.error("[CONVERSATION /turn] roadmap trigger failed: %s", exc, exc_info=True)
