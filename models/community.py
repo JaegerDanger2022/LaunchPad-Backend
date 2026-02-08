@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field, field_validator
 
 class CreateVictoryRequest(BaseModel):
     """Request model for creating a victory card"""
+    userId: str = Field(..., description="ID of the user creating the victory")
+    threadId: str = Field(..., description="Dream thread ID containing the milestone")
     milestoneId: str = Field(..., description="ID of the completed milestone")
     evidenceSnippet: Optional[str] = Field(None, max_length=200, description="User's proof text (optional), max 200 characters")
     isAnonymous: bool = Field(..., description="Whether to hide user identity")

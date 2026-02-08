@@ -246,8 +246,10 @@ async def create_victory(victory_data: CreateVictoryRequest):
     try:
         db = get_db()
 
-        # 1. Find the dream containing the milestone (check both roadmap and customMilestones)
+        # 1. Find the specific dream using user_id + thread_id + milestone_id for precision
         dream = await db.dreams.find_one({
+            "user_id": victory_data.userId,
+            "thread_id": victory_data.threadId,
             "$or": [
                 {"roadmap.milestones.id": victory_data.milestoneId},
                 {"customMilestones.id": victory_data.milestoneId}
@@ -255,7 +257,7 @@ async def create_victory(victory_data: CreateVictoryRequest):
         })
 
         if not dream:
-            logger.error(f"No dream found containing milestone {victory_data.milestoneId}")
+            logger.error(f"No dream found with user_id={victory_data.userId}, thread_id={victory_data.threadId}, milestone_id={victory_data.milestoneId}")
             raise HTTPException(status_code=404, detail="Milestone not found")
 
         # 2. Extract milestone from the dream (check both roadmap and customMilestones)
@@ -282,8 +284,8 @@ async def create_victory(victory_data: CreateVictoryRequest):
             logger.error(f"Milestone data: {milestone}")
             raise HTTPException(status_code=400, detail=f"Milestone must be completed to create a victory (current status: {milestone_status})")
 
-        # 4. Extract user ID from dream
-        user_id = dream["user_id"]
+        # 4. Use the user_id from the request (already validated via dream lookup)
+        user_id = victory_data.userId
 
         # 5. Check if THIS USER already has a victory for this milestone
         # Multiple users can post victories for the same milestone, but each user can only post once per milestone
