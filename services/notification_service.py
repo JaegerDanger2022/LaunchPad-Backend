@@ -36,7 +36,7 @@ INACTIVITY_MESSAGES = [
 ]
 
 WELCOME_MESSAGE = {
-    "title": "Welcome to PacksLight! 🎒",
+    "title": "Welcome to LaunchPad! 🚀",
     "body": "You're all set. Create your first dream and start turning it into reality."
 }
 
