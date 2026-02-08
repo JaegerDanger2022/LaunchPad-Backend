@@ -3,6 +3,7 @@ Community API endpoints for user stats and profile
 """
 
 import logging
+from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Query
 from core.database import get_db
 from models.community import (
@@ -367,10 +368,15 @@ async def toggle_pin_inspiration(user_id: str, item_id: str):
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Validate victory card exists
+        # Validate item exists (victory card OR journey recap)
         victory = await db.victory_cards.find_one({"id": item_id})
         if not victory:
-            raise HTTPException(status_code=404, detail="Victory card not found")
+            try:
+                journey_recap = await db.journey_recaps.find_one({"_id": ObjectId(item_id)})
+            except Exception:
+                journey_recap = None
+            if not journey_recap:
+                raise HTTPException(status_code=404, detail="Item not found")
 
         # Check if already pinned
         existing_pin = await db.pinned_inspirations.find_one({
