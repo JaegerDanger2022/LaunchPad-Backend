@@ -939,3 +939,61 @@ async def update_activity(user_id: str, update_data: UpdateActivityRequest):
         logger.error(f"Error updating activity for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
+
+class SavePushTokenRequest(BaseModel):
+    """Request schema for saving a push token"""
+    pushToken: str = Field(..., description="Expo push token (e.g., ExponentPushToken[xxx])")
+
+
+@router.post("/{user_id}/push-token", status_code=200, tags=["users"])
+async def save_push_token(user_id: str, data: SavePushTokenRequest):
+    """
+    Save or update a user's Expo push token for notifications.
+
+    Stores the token in push_tokens array (supports multiple devices).
+    Deduplicates — won't add the same token twice.
+
+    Args:
+        user_id: The user's unique identifier
+        data: Request body containing the Expo push token
+
+    Returns:
+        dict: Success status
+
+    Raises:
+        404: User not found
+        500: Database error
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        # Validate token format
+        if not data.pushToken.startswith("ExponentPushToken["):
+            raise HTTPException(status_code=400, detail="Invalid Expo push token format")
+
+        # Use $addToSet to avoid duplicates
+        result = await db.users.find_one_and_update(
+            {"user_id": user_id},
+            {
+                "$addToSet": {"push_tokens": data.pushToken},
+                "$set": {"updated_at": datetime.now(timezone.utc)}
+            },
+            return_document=True
+        )
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        token_count = len(result.get("push_tokens", []))
+        logger.info(f"Saved push token for user {user_id} (total tokens: {token_count})")
+
+        return {"success": True, "message": "Push token saved", "token_count": token_count}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving push token for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+

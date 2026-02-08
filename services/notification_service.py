@@ -1,18 +1,114 @@
 """
 Notification Service - Handles daily nudges and inactivity reminders
 
-This service processes notifications for users based on their preferences:
+Sends push notifications via the Expo Push API:
+https://exp.host/--/api/v2/push/send
+
+Two notification types:
 1. Daily Nudges: Sent at user's preferred time in their timezone
 2. Inactivity Reminders: Sent if no milestone completed for 2+ days
 """
 
 import logging
+import random
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
+import httpx
 import pytz
 from core.database import get_db
 
 logger = logging.getLogger(__name__)
+
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+
+# Rotate messages so users don't see the same thing every day
+DAILY_NUDGE_MESSAGES = [
+    {"title": "Time to make progress!", "body": "Your dreams are waiting. Complete your next milestone today."},
+    {"title": "Ready to crush it?", "body": "One milestone closer to your dream. Let's go."},
+    {"title": "Your future self will thank you", "body": "What will you accomplish today?"},
+    {"title": "Keep the momentum going", "body": "Small steps lead to big wins. Tackle a milestone now."},
+]
+
+INACTIVITY_MESSAGES = [
+    {"title": "We miss you!", "body": "It's been 2 days since your last win. Don't break your momentum!"},
+    {"title": "Your dreams need you", "body": "Come back and make progress. Even one milestone counts."},
+    {"title": "Don't let your streak slip", "body": "You haven't checked off any milestones in 2 days."},
+]
+
+
+async def send_expo_push(tokens: List[str], title: str, body: str, data: Optional[Dict] = None, channel_id: str = "default") -> Dict:
+    """
+    Send push notifications via the Expo Push API.
+
+    Args:
+        tokens: List of ExponentPushToken[...] strings
+        title: Notification title
+        body: Notification body text
+        data: Optional data payload
+        channel_id: Android notification channel ID
+
+    Returns:
+        dict with send results
+    """
+    if not tokens:
+        return {"sent": 0, "errors": 0}
+
+    messages = [
+        {
+            "to": token,
+            "sound": "default",
+            "title": title,
+            "body": body,
+            "data": data or {},
+            "channelId": channel_id,
+        }
+        for token in tokens
+    ]
+
+    sent = 0
+    errors = 0
+    invalid_tokens = []
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Expo accepts batches of up to 100 messages
+            for i in range(0, len(messages), 100):
+                batch = messages[i:i + 100]
+                response = await client.post(
+                    EXPO_PUSH_URL,
+                    json=batch,
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    for ticket in result.get("data", []):
+                        if ticket.get("status") == "ok":
+                            sent += 1
+                        else:
+                            errors += 1
+                            # Track invalid tokens for cleanup
+                            details = ticket.get("details", {})
+                            if details.get("error") == "DeviceNotRegistered":
+                                # Find which token failed based on position
+                                idx = result["data"].index(ticket)
+                                if idx < len(batch):
+                                    invalid_tokens.append(batch[idx]["to"])
+                else:
+                    logger.error(f"[ExpoPush] API error: {response.status_code} {response.text}")
+                    errors += len(batch)
+
+    except Exception as e:
+        logger.error(f"[ExpoPush] Request failed: {e}", exc_info=True)
+        errors += len(messages)
+
+    if invalid_tokens:
+        logger.info(f"[ExpoPush] Found {len(invalid_tokens)} invalid tokens to clean up")
+
+    return {"sent": sent, "errors": errors, "invalid_tokens": invalid_tokens}
 
 
 class NotificationService:
@@ -27,17 +123,15 @@ class NotificationService:
     async def process_notifications(self):
         """
         Main entry point - check and send all due notifications.
-        This should be called by a scheduler every 5-10 minutes.
+        Called by the scheduler every 5 minutes.
         """
         try:
             current_time = datetime.now(timezone.utc)
             logger.info(f"[NotificationService] Processing notifications at {current_time.isoformat()}")
 
-            # 1. Send daily nudges
             daily_count = await self.send_daily_nudges(current_time)
             logger.info(f"[NotificationService] Sent {daily_count} daily nudges")
 
-            # 2. Send inactivity reminders
             inactivity_count = await self.send_inactivity_reminders(current_time)
             logger.info(f"[NotificationService] Sent {inactivity_count} inactivity reminders")
 
@@ -50,43 +144,53 @@ class NotificationService:
 
         except Exception as e:
             logger.error(f"[NotificationService] Error processing notifications: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     async def send_daily_nudges(self, current_time: datetime) -> int:
-        """
-        Send daily nudges to users whose notification time has arrived.
-
-        Args:
-            current_time: Current UTC time
-
-        Returns:
-            int: Number of nudges sent
-        """
+        """Send daily nudges to users whose notification time has arrived."""
         try:
-            # Query users who:
-            # - Have notifications enabled (pref_notification_time is not null)
-            # - Have at least one active dream
             users = await self.db.users.find({
                 "pref_notification_time": {"$ne": None},
+                "push_tokens": {"$exists": True, "$ne": []},
             }).to_list(length=None)
 
             sent_count = 0
             for user in users:
-                # Check if user has active dreams
                 user_id = user.get("user_id")
-                has_active_dreams = await self._user_has_active_dreams(user_id)
-                if not has_active_dreams:
+
+                if not await self._user_has_active_dreams(user_id):
                     continue
 
-                # Check if it's time to send notification
-                if self._is_notification_time(user, current_time):
-                    # Check if we haven't sent one in the last 23 hours (prevent duplicates)
-                    if not await self._sent_daily_nudge_recently(user):
-                        await self._send_daily_nudge(user)
-                        sent_count += 1
+                if not self._is_notification_time(user, current_time):
+                    continue
+
+                if await self._sent_daily_nudge_recently(user):
+                    continue
+
+                tokens = user.get("push_tokens", [])
+                if not tokens:
+                    continue
+
+                msg = random.choice(DAILY_NUDGE_MESSAGES)
+                result = await send_expo_push(
+                    tokens=tokens,
+                    title=msg["title"],
+                    body=msg["body"],
+                    data={"type": "daily_nudge", "screen": "Home"},
+                    channel_id="default",
+                )
+
+                # Clean up invalid tokens
+                if result.get("invalid_tokens"):
+                    await self._remove_invalid_tokens(user_id, result["invalid_tokens"])
+
+                if result["sent"] > 0:
+                    await self.db.users.update_one(
+                        {"user_id": user_id},
+                        {"$set": {"last_daily_nudge": datetime.now(timezone.utc).isoformat()}}
+                    )
+                    sent_count += 1
+                    logger.info(f"[NotificationService] Daily nudge sent to user {user_id}")
 
             return sent_count
 
@@ -95,44 +199,52 @@ class NotificationService:
             return 0
 
     async def send_inactivity_reminders(self, current_time: datetime) -> int:
-        """
-        Send reminders to users inactive for 2+ days.
-
-        Args:
-            current_time: Current UTC time
-
-        Returns:
-            int: Number of reminders sent
-        """
+        """Send reminders to users inactive for 2+ days."""
         try:
-            # Calculate threshold (2 days ago)
             threshold = current_time - timedelta(days=2)
 
-            # Query users who:
-            # - Last activity was before threshold (or never)
-            # - Have notifications enabled
-            # - Have active dreams
             users = await self.db.users.find({
                 "$or": [
                     {"last_activity": {"$lt": threshold.isoformat()}},
                     {"last_activity": None}
                 ],
                 "pref_notification_time": {"$ne": None},
+                "push_tokens": {"$exists": True, "$ne": []},
             }).to_list(length=None)
 
             sent_count = 0
             for user in users:
                 user_id = user.get("user_id")
 
-                # Check if user has active dreams
-                has_active_dreams = await self._user_has_active_dreams(user_id)
-                if not has_active_dreams:
+                if not await self._user_has_active_dreams(user_id):
                     continue
 
-                # Only send if we haven't sent one in the last 24 hours
-                if not await self._sent_inactivity_reminder_recently(user):
-                    await self._send_inactivity_reminder(user)
+                if await self._sent_inactivity_reminder_recently(user):
+                    continue
+
+                tokens = user.get("push_tokens", [])
+                if not tokens:
+                    continue
+
+                msg = random.choice(INACTIVITY_MESSAGES)
+                result = await send_expo_push(
+                    tokens=tokens,
+                    title=msg["title"],
+                    body=msg["body"],
+                    data={"type": "inactivity_reminder", "screen": "Home"},
+                    channel_id="reengagement",
+                )
+
+                if result.get("invalid_tokens"):
+                    await self._remove_invalid_tokens(user_id, result["invalid_tokens"])
+
+                if result["sent"] > 0:
+                    await self.db.users.update_one(
+                        {"user_id": user_id},
+                        {"$set": {"last_inactivity_reminder": datetime.now(timezone.utc).isoformat()}}
+                    )
                     sent_count += 1
+                    logger.info(f"[NotificationService] Inactivity reminder sent to user {user_id}")
 
             return sent_count
 
@@ -141,31 +253,19 @@ class NotificationService:
             return 0
 
     def _is_notification_time(self, user: Dict, current_time: datetime) -> bool:
-        """
-        Check if current time matches user's preferred notification time.
-
-        Args:
-            user: User document
-            current_time: Current UTC time
-
-        Returns:
-            bool: True if it's time to send notification
-        """
+        """Check if current time matches user's preferred notification time (±5 min window)."""
         try:
             user_tz_str = user.get("pref_timezone", "UTC")
-            pref_time = user.get("pref_notification_time")  # e.g., "09:00"
+            pref_time = user.get("pref_notification_time")
 
             if not pref_time:
                 return False
 
-            # Parse preferred time
             hour, minute = map(int, pref_time.split(":"))
 
-            # Get current time in user's timezone
             user_tz = pytz.timezone(user_tz_str)
             user_local_time = current_time.astimezone(user_tz)
 
-            # Check if it's within the notification window (±5 minutes)
             return (
                 user_local_time.hour == hour and
                 abs(user_local_time.minute - minute) <= 5
@@ -176,15 +276,7 @@ class NotificationService:
             return False
 
     async def _user_has_active_dreams(self, user_id: str) -> bool:
-        """
-        Check if user has any active dreams.
-
-        Args:
-            user_id: User ID
-
-        Returns:
-            bool: True if user has active dreams
-        """
+        """Check if user has any active dreams."""
         try:
             dream = await self.db.dreams.find_one({
                 "user_id": user_id,
@@ -196,119 +288,40 @@ class NotificationService:
             return False
 
     async def _sent_daily_nudge_recently(self, user: Dict) -> bool:
-        """
-        Check if we've sent a daily nudge in the last 23 hours.
-
-        Args:
-            user: User document
-
-        Returns:
-            bool: True if nudge was sent recently
-        """
+        """Check if we've sent a daily nudge in the last 23 hours."""
         last_nudge = user.get("last_daily_nudge")
         if not last_nudge:
             return False
-
         try:
             last_nudge_time = datetime.fromisoformat(last_nudge.replace("Z", "+00:00"))
-            time_since = datetime.now(timezone.utc) - last_nudge_time
-            return time_since < timedelta(hours=23)
-        except Exception as e:
-            logger.error(f"Error checking last daily nudge: {e}")
+            return datetime.now(timezone.utc) - last_nudge_time < timedelta(hours=23)
+        except Exception:
             return False
 
     async def _sent_inactivity_reminder_recently(self, user: Dict) -> bool:
-        """
-        Check if we've sent an inactivity reminder in the last 24 hours.
-
-        Args:
-            user: User document
-
-        Returns:
-            bool: True if reminder was sent recently
-        """
+        """Check if we've sent an inactivity reminder in the last 24 hours."""
         last_reminder = user.get("last_inactivity_reminder")
         if not last_reminder:
             return False
-
         try:
             last_reminder_time = datetime.fromisoformat(last_reminder.replace("Z", "+00:00"))
-            time_since = datetime.now(timezone.utc) - last_reminder_time
-            return time_since < timedelta(hours=24)
-        except Exception as e:
-            logger.error(f"Error checking last inactivity reminder: {e}")
+            return datetime.now(timezone.utc) - last_reminder_time < timedelta(hours=24)
+        except Exception:
             return False
 
-    async def _send_daily_nudge(self, user: Dict):
-        """
-        Send daily nudge notification to user.
-
-        Args:
-            user: User document
-        """
-        user_id = user.get("user_id")
-
+    async def _remove_invalid_tokens(self, user_id: str, invalid_tokens: List[str]):
+        """Remove invalid/expired push tokens from user's token list."""
         try:
-            # In a real implementation, you would:
-            # 1. Get user's device token(s) from database
-            # 2. Send push notification via FCM/OneSignal/etc.
-            # 3. Handle delivery failures
-
-            # For now, we'll just log and update the timestamp
-            logger.info(f"[NotificationService] Sending daily nudge to user {user_id}")
-
-            # TODO: Implement actual notification sending here
-            # message = {
-            #     "title": "Time to make progress! 🚀",
-            #     "body": "Your dreams are waiting. Complete your next milestone today!",
-            #     "data": {"type": "daily_nudge"}
-            # }
-            # await notification_provider.send(user_id, message)
-
-            # Update last notification timestamp
             await self.db.users.update_one(
                 {"user_id": user_id},
-                {"$set": {"last_daily_nudge": datetime.now(timezone.utc).isoformat()}}
+                {"$pullAll": {"push_tokens": invalid_tokens}}
             )
-
-            logger.info(f"[NotificationService] Daily nudge sent to user {user_id}")
-
+            logger.info(f"[NotificationService] Removed {len(invalid_tokens)} invalid tokens for user {user_id}")
         except Exception as e:
-            logger.error(f"[NotificationService] Error sending daily nudge to user {user_id}: {e}", exc_info=True)
-
-    async def _send_inactivity_reminder(self, user: Dict):
-        """
-        Send inactivity reminder notification to user.
-
-        Args:
-            user: User document
-        """
-        user_id = user.get("user_id")
-
-        try:
-            logger.info(f"[NotificationService] Sending inactivity reminder to user {user_id}")
-
-            # TODO: Implement actual notification sending here
-            # message = {
-            #     "title": "We miss you! 🌟",
-            #     "body": "You haven't checked off any milestones in 2 days. Don't break your momentum!",
-            #     "data": {"type": "inactivity_reminder"}
-            # }
-            # await notification_provider.send(user_id, message)
-
-            # Update last inactivity reminder timestamp
-            await self.db.users.update_one(
-                {"user_id": user_id},
-                {"$set": {"last_inactivity_reminder": datetime.now(timezone.utc).isoformat()}}
-            )
-
-            logger.info(f"[NotificationService] Inactivity reminder sent to user {user_id}")
-
-        except Exception as e:
-            logger.error(f"[NotificationService] Error sending inactivity reminder to user {user_id}: {e}", exc_info=True)
+            logger.error(f"Error removing invalid tokens for user {user_id}: {e}")
 
 
-# Global notification service instance (initialized on app startup)
+# Global instance (initialized on first use after DB is ready)
 _notification_service: Optional[NotificationService] = None
 
 
