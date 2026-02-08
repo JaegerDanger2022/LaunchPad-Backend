@@ -246,12 +246,16 @@ async def create_victory(victory_data: CreateVictoryRequest):
     try:
         db = get_db()
 
-        # 1. Find the dream containing the milestone
+        # 1. Find the dream containing the milestone (check both roadmap and customMilestones)
         dream = await db.dreams.find_one({
-            "roadmap.milestones.id": victory_data.milestoneId
+            "$or": [
+                {"roadmap.milestones.id": victory_data.milestoneId},
+                {"customMilestones.id": victory_data.milestoneId}
+            ]
         })
 
         if not dream:
+            logger.error(f"No dream found containing milestone {victory_data.milestoneId}")
             raise HTTPException(status_code=404, detail="Milestone not found")
 
         # 2. Extract milestone from the dream (check both roadmap and customMilestones)
