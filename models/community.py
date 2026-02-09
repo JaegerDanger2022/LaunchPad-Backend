@@ -74,6 +74,7 @@ class VictoriesListResponse(BaseModel):
     """Response model for victory cards list"""
     victories: list[VictoryCardResponse]
     pagination: PaginationInfo
+    pinnedItemIds: list[str] = []
 
 
 class CreateVictoryResponse(BaseModel):

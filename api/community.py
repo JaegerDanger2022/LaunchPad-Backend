@@ -325,6 +325,13 @@ async def get_user_inspiration(
 
         logger.info(f"Retrieved {len(victories)} pinned inspiration victories for user {user_id} (page {page})")
 
+        # Fetch ALL pinned item IDs (both victory cards and journey recaps)
+        all_pins_cursor = db.pinned_inspirations.find(
+            {"userId": user_id}, {"victoryCardId": 1, "_id": 0}
+        )
+        all_pins = await all_pins_cursor.to_list(length=None)
+        pinned_item_ids = [pin["victoryCardId"] for pin in all_pins]
+
         # Build pagination info
         pagination = PaginationInfo(
             page=page,
@@ -335,7 +342,8 @@ async def get_user_inspiration(
 
         return VictoriesListResponse(
             victories=victories,
-            pagination=pagination
+            pagination=pagination,
+            pinnedItemIds=pinned_item_ids
         )
 
     except HTTPException:
