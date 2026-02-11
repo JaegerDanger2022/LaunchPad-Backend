@@ -1040,3 +1040,413 @@ async def send_welcome(user_id: str):
         logger.error(f"Error sending welcome notification for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
+
+# ============================================================================
+# DATA MANAGEMENT ENDPOINTS (Your Data screen)
+# ============================================================================
+
+
+@router.get("/{user_id}/personal-data", status_code=200, tags=["users"])
+async def get_personal_data(user_id: str):
+    """
+    Return all personal data we hold about a user.
+
+    Used by the "Your Data" screen so the user can view everything stored about them.
+
+    Args:
+        user_id: The user's unique identifier (Firebase UID)
+
+    Returns:
+        dict: Comprehensive personal data summary
+
+    Raises:
+        404: User not found
+        500: Database error
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        logger.info(f"[getPersonalData] Fetching personal data for user {user_id}")
+
+        user = await db.users.find_one({"user_id": user_id})
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Count dreams
+        dreams_count = await db.dreams.count_documents({"user_id": user_id})
+
+        # Count milestones (total and completed) across all dreams
+        pipeline = [
+            {"$match": {"user_id": user_id}},
+            {"$project": {
+                "milestones": "$roadmap.milestones",
+            }},
+            {"$unwind": "$milestones"},
+            {"$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "completed": {
+                    "$sum": {"$cond": [{"$eq": ["$milestones.status", "completed"]}, 1, 0]}
+                },
+            }},
+        ]
+        milestone_stats = await db.dreams.aggregate(pipeline).to_list(length=1)
+        total_milestones = milestone_stats[0]["total"] if milestone_stats else 0
+        completed_milestones = milestone_stats[0]["completed"] if milestone_stats else 0
+
+        # Count community posts (victory cards + journey recaps)
+        victory_count = await db.victory_cards.count_documents({"userId": user_id})
+        recap_count = await db.journey_recaps.count_documents({"userId": user_id})
+        community_posts_count = victory_count + recap_count
+
+        # Check push token registration
+        push_tokens = user.get("push_tokens", [])
+        push_token_registered = len(push_tokens) > 0
+
+        # Serialize created_at
+        created_at = user.get("created_at")
+        if created_at is not None and not isinstance(created_at, str):
+            created_at = created_at.isoformat()
+
+        # Serialize streak dates
+        streak = user.get("streak")
+        if streak and isinstance(streak.get("last_completion_date"), datetime):
+            streak["last_completion_date"] = streak["last_completion_date"].isoformat()
+
+        # Serialize last_activity
+        last_activity = user.get("last_activity")
+        if last_activity is not None and not isinstance(last_activity, str):
+            last_activity = last_activity.isoformat()
+
+        response = {
+            "user_id": user.get("user_id"),
+            "firstname": user.get("firstname", ""),
+            "lastname": user.get("lastname", ""),
+            "email": user.get("email", ""),
+            "created_at": created_at,
+            "pref_timezone": user.get("pref_timezone"),
+            "pref_notification_time": user.get("pref_notification_time"),
+            "streak": streak,
+            "dreams_count": dreams_count,
+            "completed_milestones_count": completed_milestones,
+            "total_milestones_count": total_milestones,
+            "community_posts_count": community_posts_count,
+            "last_activity": last_activity,
+            "push_token_registered": push_token_registered,
+        }
+
+        logger.info(f"[getPersonalData] Successfully retrieved personal data for user {user_id}")
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[getPersonalData] Error for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error while fetching personal data")
+
+
+class DataExportRequest(BaseModel):
+    """Request schema for data export"""
+    format: str = Field(default="json", description="Export format (json or csv)")
+
+
+@router.post("/{user_id}/data-export", status_code=200, tags=["users"])
+async def export_user_data(user_id: str, request_data: DataExportRequest):
+    """
+    Export all user data in a portable format.
+
+    Gathers data from all collections related to the user and returns it as a
+    single JSON document. Used by the "Your Data" screen for GDPR-style data portability.
+
+    Args:
+        user_id: The user's unique identifier (Firebase UID)
+        request_data: Export options (format)
+
+    Returns:
+        dict: Complete user data export
+
+    Raises:
+        404: User not found
+        500: Database error
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        logger.info(f"[exportUserData] Exporting data for user {user_id}")
+
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Serialize datetime fields in user doc
+        for key in ["created_at", "updated_at", "last_activity"]:
+            val = user.get(key)
+            if val is not None and not isinstance(val, str):
+                user[key] = val.isoformat()
+
+        streak = user.get("streak")
+        if streak and isinstance(streak.get("last_completion_date"), datetime):
+            streak["last_completion_date"] = streak["last_completion_date"].isoformat()
+
+        # Fetch all dreams with full roadmaps
+        dreams_cursor = db.dreams.find({"user_id": user_id}, {"_id": 0})
+        dreams = await dreams_cursor.to_list(length=None)
+        for dream in dreams:
+            for key in ["created_at", "updated_at"]:
+                val = dream.get(key)
+                if val is not None and not isinstance(val, str):
+                    dream[key] = val.isoformat()
+
+        # Fetch victory cards
+        victories_cursor = db.victory_cards.find({"userId": user_id}, {"_id": 0})
+        victories = await victories_cursor.to_list(length=None)
+        for v in victories:
+            for key in ["createdAt", "completedDate"]:
+                val = v.get(key)
+                if val is not None and not isinstance(val, str):
+                    v[key] = val.isoformat()
+
+        # Fetch journey recaps
+        recaps_cursor = db.journey_recaps.find({"userId": user_id}, {"_id": 0})
+        recaps = await recaps_cursor.to_list(length=None)
+        for r in recaps:
+            for key in ["createdAt"]:
+                val = r.get(key)
+                if val is not None and not isinstance(val, str):
+                    r[key] = val.isoformat()
+
+        # Fetch courage boosts given by user
+        boosts_cursor = db.courage_boosts.find({"giverId": user_id}, {"_id": 0})
+        boosts_given = await boosts_cursor.to_list(length=None)
+        for b in boosts_given:
+            if isinstance(b.get("createdAt"), datetime):
+                b["createdAt"] = b["createdAt"].isoformat()
+
+        # Fetch permission slips given by user
+        permissions_cursor = db.permission_slips.find({"giverId": user_id}, {"_id": 0})
+        permissions_given = await permissions_cursor.to_list(length=None)
+        for p in permissions_given:
+            if isinstance(p.get("createdAt"), datetime):
+                p["createdAt"] = p["createdAt"].isoformat()
+
+        export_data = {
+            "account": {
+                "user_id": user.get("user_id"),
+                "email": user.get("email"),
+                "firstname": user.get("firstname"),
+                "lastname": user.get("lastname"),
+                "created_at": user.get("created_at"),
+                "plan": user.get("plan"),
+                "pref_timezone": user.get("pref_timezone"),
+                "pref_notification_time": user.get("pref_notification_time"),
+                "couragePoints": user.get("couragePoints", 0),
+            },
+            "streak": user.get("streak"),
+            "dreams": dreams,
+            "victory_cards": victories,
+            "journey_recaps": recaps,
+            "courage_boosts_given": boosts_given,
+            "permission_slips_given": permissions_given,
+            "community_profile": user.get("communityProfile"),
+            "community_stats": user.get("communityStats"),
+        }
+
+        logger.info(f"[exportUserData] Successfully exported data for user {user_id} "
+                     f"({len(dreams)} dreams, {len(victories)} victories, {len(recaps)} recaps)")
+
+        return {
+            "success": True,
+            "message": "Data exported successfully",
+            "data": export_data,
+            "export_date": datetime.now(timezone.utc).isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[exportUserData] Error for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error while exporting data")
+
+
+@router.get("/{user_id}/export-dreams", status_code=200, tags=["users"])
+async def export_dreams(user_id: str):
+    """
+    Export user's dreams, milestones, and progress data.
+
+    Returns a structured export of all dreams with their roadmaps (milestones)
+    and the user's streak/progress data. Used by the "Your Data" screen.
+
+    Args:
+        user_id: The user's unique identifier (Firebase UID)
+
+    Returns:
+        dict: Dreams and progress export
+
+    Raises:
+        404: User not found
+        500: Database error
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        logger.info(f"[exportDreams] Exporting dreams for user {user_id}")
+
+        user = await db.users.find_one({"user_id": user_id})
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Fetch all dreams with full roadmaps
+        dreams_cursor = db.dreams.find({"user_id": user_id}, {"_id": 0})
+        raw_dreams = await dreams_cursor.to_list(length=None)
+
+        dreams_export = []
+        for dream in raw_dreams:
+            milestones = dream.get("roadmap", {}).get("milestones", [])
+            milestones_export = []
+            for m in milestones:
+                milestone_data = {
+                    "title": m.get("title", ""),
+                    "status": m.get("status", "pending"),
+                    "challenge_type": m.get("challenge_type", ""),
+                }
+                updated = m.get("updated_at")
+                if updated is not None:
+                    if not isinstance(updated, str):
+                        updated = updated.isoformat()
+                    if m.get("status") == "completed":
+                        milestone_data["completed_at"] = updated
+                milestones_export.append(milestone_data)
+
+            created_at = dream.get("created_at")
+            if created_at is not None and not isinstance(created_at, str):
+                created_at = created_at.isoformat()
+
+            dream_data = {
+                "dream_title": dream.get("dream", ""),
+                "status": dream.get("status", "active"),
+                "created_at": created_at,
+                "milestones": milestones_export,
+            }
+
+            # Add completed_at if dream is complete
+            if dream.get("isComplete"):
+                updated_at = dream.get("updated_at")
+                if updated_at is not None and not isinstance(updated_at, str):
+                    updated_at = updated_at.isoformat()
+                dream_data["completed_at"] = updated_at
+
+            dreams_export.append(dream_data)
+
+        # Get streak data
+        streak = user.get("streak")
+        if streak and isinstance(streak.get("last_completion_date"), datetime):
+            streak["last_completion_date"] = streak["last_completion_date"].isoformat()
+
+        logger.info(f"[exportDreams] Successfully exported {len(dreams_export)} dreams for user {user_id}")
+
+        return {
+            "success": True,
+            "dreams": dreams_export,
+            "streak_data": streak,
+            "export_date": datetime.now(timezone.utc).isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[exportDreams] Error for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error while exporting dreams")
+
+
+@router.delete("/{user_id}", status_code=200, tags=["users"])
+async def delete_account(user_id: str):
+    """
+    Permanently delete a user's account and all associated data.
+
+    Removes the user document and all related data across every collection:
+    dreams, victory cards, journey recaps, courage boosts, permission slips,
+    me-too reactions, and streaks.
+
+    Args:
+        user_id: The user's unique identifier (Firebase UID)
+
+    Returns:
+        dict: Success status with deletion summary
+
+    Raises:
+        404: User not found
+        500: Database error
+    """
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    try:
+        logger.info(f"[deleteAccount] Starting account deletion for user {user_id}")
+
+        # Verify user exists
+        user = await db.users.find_one({"user_id": user_id})
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Delete from all collections
+        deleted_counts = {}
+
+        # 1. Delete all dreams
+        result = await db.dreams.delete_many({"user_id": user_id})
+        deleted_counts["dreams"] = result.deleted_count
+        logger.info(f"[deleteAccount] Deleted {result.deleted_count} dreams for user {user_id}")
+
+        # 2. Delete victory cards
+        result = await db.victory_cards.delete_many({"userId": user_id})
+        deleted_counts["victory_cards"] = result.deleted_count
+
+        # 3. Delete journey recaps
+        result = await db.journey_recaps.delete_many({"userId": user_id})
+        deleted_counts["journey_recaps"] = result.deleted_count
+
+        # 4. Delete courage boosts (given and received)
+        result = await db.courage_boosts.delete_many(
+            {"$or": [{"giverId": user_id}, {"receiverId": user_id}]}
+        )
+        deleted_counts["courage_boosts"] = result.deleted_count
+
+        # 5. Delete permission slips (given and received)
+        result = await db.permission_slips.delete_many(
+            {"$or": [{"giverId": user_id}, {"receiverId": user_id}]}
+        )
+        deleted_counts["permission_slips"] = result.deleted_count
+
+        # 6. Delete me-too reactions
+        result = await db.me_toos.delete_many({"userId": user_id})
+        deleted_counts["me_toos"] = result.deleted_count
+
+        # 7. Delete streak data
+        result = await db.streaks.delete_many({"user_id": user_id})
+        deleted_counts["streaks"] = result.deleted_count
+
+        # 8. Delete the user document itself (last)
+        result = await db.users.delete_one({"user_id": user_id})
+        deleted_counts["user"] = result.deleted_count
+
+        logger.info(f"[deleteAccount] Account deletion complete for user {user_id}: {deleted_counts}")
+
+        return {
+            "success": True,
+            "message": "Account and all associated data have been permanently deleted",
+            "deleted": deleted_counts,
+            "deletion_scheduled": datetime.now(timezone.utc).isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[deleteAccount] Error for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error while deleting account")
+
