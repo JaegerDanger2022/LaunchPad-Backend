@@ -280,21 +280,62 @@ async def get_weekly_schedule(user_id: str, week_start: Optional[str] = None):
 
 @router.patch("/schedule/step/{step_id}")
 async def update_scheduled_step(step_id: str, completed: Optional[bool] = None):
-    """Update scheduled step (mark complete/incomplete)."""
+    """Update scheduled step - deletes if completed, updates if uncompleted."""
     db = get_db()
 
     logger.info(f"[SCHEDULE] Updating step {step_id}, completed={completed}")
 
     from bson import ObjectId
-    update_doc = {"updated_at": datetime.now()}
 
     if completed is not None:
-        update_doc["completed"] = completed
         if completed:
-            update_doc["completed_at"] = datetime.now()
-        else:
-            update_doc["completed_at"] = None
+            # Delete the task from the database when marked as complete
+            result = await db.scheduled_steps.delete_one({"_id": ObjectId(step_id)})
 
+            if result.deleted_count == 0:
+                logger.error(f"[SCHEDULE] Step not found: {step_id}")
+                raise HTTPException(status_code=404, detail="Step not found")
+
+            logger.info(f"[SCHEDULE] Successfully deleted completed step {step_id}")
+
+            return {
+                "success": True,
+                "deleted": True,
+                "step_id": step_id
+            }
+        else:
+            # Only update when unchecking (marking as incomplete)
+            update_doc = {
+                "completed": False,
+                "completed_at": None,
+                "updated_at": datetime.now()
+            }
+
+            result = await db.scheduled_steps.update_one(
+                {"_id": ObjectId(step_id)},
+                {"$set": update_doc}
+            )
+
+            if result.matched_count == 0:
+                logger.error(f"[SCHEDULE] Step not found: {step_id}")
+                raise HTTPException(status_code=404, detail="Step not found")
+
+            # Fetch updated step
+            step = await db.scheduled_steps.find_one({"_id": ObjectId(step_id)})
+
+            logger.info(f"[SCHEDULE] Successfully updated step {step_id}")
+
+            return {
+                "success": True,
+                "step": {
+                    "_id": str(step["_id"]),
+                    "completed": step["completed"],
+                    "step_description": step["step_description"]
+                }
+            }
+
+    # If no completed parameter provided, just update timestamp
+    update_doc = {"updated_at": datetime.now()}
     result = await db.scheduled_steps.update_one(
         {"_id": ObjectId(step_id)},
         {"$set": update_doc}
@@ -304,16 +345,13 @@ async def update_scheduled_step(step_id: str, completed: Optional[bool] = None):
         logger.error(f"[SCHEDULE] Step not found: {step_id}")
         raise HTTPException(status_code=404, detail="Step not found")
 
-    # Fetch updated step
     step = await db.scheduled_steps.find_one({"_id": ObjectId(step_id)})
-
-    logger.info(f"[SCHEDULE] Successfully updated step {step_id}")
 
     return {
         "success": True,
         "step": {
             "_id": str(step["_id"]),
-            "completed": step["completed"],
+            "completed": step.get("completed", False),
             "step_description": step["step_description"]
         }
     }
