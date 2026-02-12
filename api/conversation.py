@@ -142,6 +142,8 @@ async def conversation_start(req: ConversationStartRequest):
                 headers=_lg_headers(),
                 json=invoke_payload,
             )
+            if invoke_resp.status_code != 200:
+                logger.error("[CONVERSATION /start] LangGraph returned %s: %s", invoke_resp.status_code, invoke_resp.text)
             invoke_resp.raise_for_status()
             output = invoke_resp.json().get("output", invoke_resp.json())
     except Exception as exc:
