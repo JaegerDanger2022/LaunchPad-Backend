@@ -127,16 +127,12 @@ async def plan_milestone(req: PlanMilestoneRequest):
             # Wait for completion
             run_data = run_response.json()
             logger.info(f"[SCHEDULE] Scheduler workflow completed with status: {run_data.get('status')}")
-            logger.info(f"[SCHEDULE] Full run_data keys: {list(run_data.keys())}")
-            logger.info(f"[SCHEDULE] run_data.output type: {type(run_data.get('output'))}")
 
-            # Extract scheduled_steps from output
-            output = run_data.get("output", {})
-            logger.info(f"[SCHEDULE] Output keys: {list(output.keys()) if isinstance(output, dict) else 'not a dict'}")
-            scheduled_steps = output.get("scheduled_steps")
+            # Extract scheduled_steps - it's directly in run_data, not nested in output
+            scheduled_steps = run_data.get("scheduled_steps")
 
             if not scheduled_steps:
-                error_msg = output.get("error", "Scheduler failed to generate schedule")
+                error_msg = run_data.get("error", "Scheduler failed to generate schedule")
                 logger.error(f"[SCHEDULE] Workflow error: {error_msg}")
                 raise HTTPException(
                     status_code=500,
