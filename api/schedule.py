@@ -92,7 +92,8 @@ async def plan_milestone(req: PlanMilestoneRequest):
             logger.info("[SCHEDULE] Creating LangGraph thread...")
             thread_response = await client.post(
                 f"{langgraph_url}/threads",
-                headers={"x-api-key": api_key}
+                headers={"x-api-key": api_key},
+                json={}
             )
             if thread_response.status_code != 200:
                 logger.error("[SCHEDULE] Thread creation returned %s: %s", thread_response.status_code, thread_response.text)
