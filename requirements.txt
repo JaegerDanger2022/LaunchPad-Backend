@@ -10,3 +10,4 @@ openai>=1.0.0
 elevenlabs>=1.0.0
 apscheduler>=3.10.0
 pytz>=2023.3
+firebase-admin>=6.2.0

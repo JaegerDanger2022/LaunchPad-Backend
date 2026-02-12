@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from pymongo.errors import DuplicateKeyError
 from core.database import get_db
+from core.firebase_admin import delete_firebase_user
 from services.notification_service import send_welcome_notification
 
 logger = logging.getLogger(__name__)
@@ -1394,6 +1395,20 @@ async def delete_account(user_id: str):
         user = await db.users.find_one({"user_id": user_id})
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
+
+        # Delete Firebase Authentication user first
+        try:
+            firebase_deleted = await delete_firebase_user(user_id)
+            if firebase_deleted:
+                logger.info(f"[deleteAccount] Firebase auth user deleted for {user_id}")
+            else:
+                logger.warning(f"[deleteAccount] Firebase auth deletion skipped for {user_id} (SDK not configured)")
+        except Exception as e:
+            logger.error(f"[deleteAccount] Firebase auth deletion failed for {user_id}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to delete authentication account. Please try again or contact support."
+            )
 
         # Delete from all collections
         deleted_counts = {}
