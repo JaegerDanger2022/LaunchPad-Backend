@@ -213,6 +213,19 @@ async def create_indexes():
         await db.dreams.create_index([("user_id", 1), ("updated_at", -1)])
         logger.info("[DB] Index created: dreams (user_id, updated_at)")
 
+        # ============= SCHEDULED STEPS COLLECTION INDEXES (CALENDAR FEATURE) =============
+        logger.info("[DB] Creating compound index: scheduled_steps (user_id, scheduled_date)")
+        await db.scheduled_steps.create_index([("user_id", 1), ("scheduled_date", 1)])
+        logger.info("[DB] Index created: scheduled_steps (user_id, scheduled_date)")
+
+        logger.info("[DB] Creating compound index: scheduled_steps (user_id, milestone_id)")
+        await db.scheduled_steps.create_index([("user_id", 1), ("milestone_id", 1)])
+        logger.info("[DB] Index created: scheduled_steps (user_id, milestone_id)")
+
+        logger.info("[DB] Creating compound index: scheduled_steps (user_id, week_start_date)")
+        await db.scheduled_steps.create_index([("user_id", 1), ("week_start_date", 1)])
+        logger.info("[DB] Index created: scheduled_steps (user_id, week_start_date)")
+
         logger.info("[DB] All database indexes created successfully")
     except Exception as e:
         logger.error(f"[DB] Failed to create indexes: {e}", exc_info=True)
