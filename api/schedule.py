@@ -55,13 +55,33 @@ async def plan_milestone(req: PlanMilestoneRequest):
     """
     db = get_db()
 
-    logger.info(f"[SCHEDULE] Planning milestone {req.milestone_id} for user {req.user_id}")
+    logger.info(f"[SCHEDULE] Planning milestone with params:")
+    logger.info(f"[SCHEDULE]   user_id: {req.user_id}")
+    logger.info(f"[SCHEDULE]   milestone_id: {req.milestone_id}")
+    logger.info(f"[SCHEDULE]   thread_id: {req.thread_id}")
+    logger.info(f"[SCHEDULE]   days_per_week: {req.days_per_week}")
+    logger.info(f"[SCHEDULE]   week_start_date: {req.week_start_date}")
 
     # 1. Fetch dream + milestone details
+    logger.info(f"[SCHEDULE] Querying dreams collection for thread_id: {req.thread_id}")
     dream = await db.dreams.find_one({"thread_id": req.thread_id})
+
     if not dream:
-        logger.error(f"[SCHEDULE] Dream not found: {req.thread_id}")
-        raise HTTPException(status_code=404, detail="Dream not found")
+        logger.error(f"[SCHEDULE] Dream not found in dreams collection for thread_id: {req.thread_id}")
+
+        # Check if any dreams exist for this user to help debug
+        user_dreams_count = await db.dreams.count_documents({"user_id": req.user_id})
+        logger.error(f"[SCHEDULE] User {req.user_id} has {user_dreams_count} dreams in total")
+
+        if user_dreams_count > 0:
+            # Sample one dream to see thread_id format
+            sample_dream = await db.dreams.find_one({"user_id": req.user_id}, {"thread_id": 1})
+            logger.error(f"[SCHEDULE] Sample thread_id format: {sample_dream.get('thread_id')}")
+
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dream not found for thread_id: {req.thread_id}. Please check that the dream exists and thread_id is correct."
+        )
 
     milestone = next(
         (m for m in dream.get("roadmap", {}).get("milestones", [])

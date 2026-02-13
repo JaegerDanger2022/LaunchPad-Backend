@@ -20,6 +20,94 @@ class UpdateMilestoneRequest(BaseModel):
     impact: str | None = Field(None, description="Impact level - 'critical', 'high', 'medium', or 'low'")
 
 
+@router.put("/mark-week-planned/{user_id}/{thread_id}/{milestone_id}", status_code=200, tags=["milestone"])
+async def mark_milestone_week_planned(
+    user_id: str,
+    thread_id: str,
+    milestone_id: str
+):
+    """
+    Mark a milestone as having its week planned.
+
+    Args:
+        user_id: The user ID who owns the dream
+        thread_id: The thread ID of the dream containing the milestone
+        milestone_id: The ID of the milestone to mark as week planned
+
+    Returns:
+        dict: Success response
+
+    Raises:
+        404: User, dream, or milestone not found
+        500: Database error
+    """
+    try:
+        db = get_db()
+        if db is None:
+            logger.error("Database connection not available")
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not available"
+            )
+
+        logger.info(f"[MILESTONE] Marking milestone {milestone_id} as week_planned for user {user_id}")
+
+        # Verify dream exists
+        dream_doc = await db.dreams.find_one(
+            {"thread_id": thread_id, "user_id": user_id}
+        )
+
+        if not dream_doc:
+            logger.warning(f"Dream not found: {thread_id} for user {user_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Dream {thread_id} not found for user {user_id}"
+            )
+
+        # Find milestone in roadmap
+        milestones = dream_doc.get("roadmap", {}).get("milestones", [])
+        milestone_idx = None
+        for idx, m in enumerate(milestones):
+            if m["id"] == milestone_id:
+                milestone_idx = idx
+                break
+
+        if milestone_idx is None:
+            logger.warning(f"Milestone {milestone_id} not found in dream {thread_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Milestone {milestone_id} not found in dream {thread_id}"
+            )
+
+        # Update the milestone's week_planned field
+        update_field = f"roadmap.milestones.{milestone_idx}.week_planned"
+        await db.dreams.update_one(
+            {"thread_id": thread_id},
+            {
+                "$set": {
+                    update_field: True,
+                    "updated_at": datetime.now(timezone.utc)
+                }
+            }
+        )
+
+        logger.info(f"[MILESTONE] Successfully marked milestone {milestone_id} as week_planned")
+
+        return {
+            "success": True,
+            "message": "Milestone marked as week planned"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error marking milestone as week planned: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to mark milestone as week planned: {str(e)}"
+        )
+
+
 @router.put("/update-status/{user_id}/{thread_id}/{milestone_id}", status_code=200, tags=["milestone"])
 async def update_milestone_status(
     user_id: str,
